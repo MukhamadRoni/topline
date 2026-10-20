@@ -24,6 +24,7 @@ use topline_core::*;
 use topline_store::Store;
 
 use crate::clip;
+use crate::ctxmenu::{self, ContextMenu, Entry, Item};
 use crate::editbox::EditBox;
 use crate::gfx::Gfx;
 use crate::launcher::{self, DropEvent, Icons};
@@ -115,6 +116,8 @@ struct App {
     settings_win: Option<SettingsWindow>,
     /// Menu kaca klik kanan ikon tray (hanya selama terbuka).
     tray_menu: Option<TrayMenu>,
+    /// Menu konteks kaca tile launcher dan id sematannya (hanya selama terbuka).
+    ctx_menu: Option<(ContextMenu, u64)>,
 }
 
 fn scale_of(hwnd: HWND) -> f32 {
@@ -179,6 +182,7 @@ impl App {
             lyrics_worker,
             settings_win: None,
             tray_menu: None,
+            ctx_menu: None,
         };
         // Drag & drop dari Explorer/Start ke notch (UI thread STA, OleInitialize di run()).
         let dt: IDropTarget = launcher::DropTarget::new(hwnd).into();
@@ -631,11 +635,42 @@ impl App {
         }
     }
 
+    /// Klik kanan tile launcher: menu konteks kaca (menu Win32 hanya cadangan).
     fn pin_menu(&mut self, id: u64) {
         let Some(pin) = self.core.data.pins.iter().find(|p| p.id == id).cloned() else { return };
-        let choice = launcher::pin_menu(self.host, &pin, self.core.lang);
+        if let Some((mut m, _)) = self.ctx_menu.take() {
+            m.close();
+        }
+        let l = self.core.lang;
+        let item = |id: usize, label: &str, icon: char, enabled: bool, danger: bool| {
+            Entry::Item(Item { id, label: label.to_string(), icon, enabled, danger })
+        };
+        let entries = vec![
+            item(launcher::MENU_OPEN, l.t("Buka", "Open"), G_OPEN, !self.missing.contains(&id), false),
+            item(launcher::MENU_REVEAL, l.t("Buka lokasi file", "Open file location"), G_FOLDER, !pin.target.starts_with("shell:"), false),
+            item(launcher::MENU_ADMIN, l.t("Jalankan sebagai administrator", "Run as administrator"), G_ADMIN, launcher::can_elevate(&pin.target), false),
+            Entry::Separator,
+            item(launcher::MENU_UNPIN, l.t("Lepas sematan", "Unpin"), G_UNPIN, true, true),
+        ];
+        let mut at = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut at);
+        }
+        match ContextMenu::open(self.notch.compositor(), &self.gfx, self.core.data.settings.solid, at, &pin.name, entries) {
+            Ok(m) => self.ctx_menu = Some((m, id)),
+            Err(e) => {
+                util::log(&format!("context menu error: {e}"));
+                let choice = launcher::pin_menu(self.host, &pin, l);
+                self.pin_choice(id, choice);
+            }
+        }
+    }
+
+    fn pin_choice(&mut self, id: u64, choice: usize) {
+        let Some(pin) = self.core.data.pins.iter().find(|p| p.id == id).cloned() else { return };
         util::log(&format!("pin menu {} -> {}", pin.id, choice));
         match choice {
+            launcher::MENU_OPEN => self.command(Command::LaunchPin(id)),
             launcher::MENU_REVEAL => {
                 self.command(Command::Close);
                 launcher::reveal(&pin.target);
@@ -646,6 +681,48 @@ impl App {
             }
             launcher::MENU_UNPIN => self.command(Command::RemovePin(id)),
             _ => {}
+        }
+    }
+
+    fn on_ctx_menu_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        let (m, _) = self.ctx_menu.as_mut()?;
+        match m.on_message(msg, wp, lp) {
+            ctxmenu::Reply::Default => None,
+            ctxmenu::Reply::Done(r) => Some(r),
+            ctxmenu::Reply::Redraw => {
+                m.draw(&self.gfx);
+                Some(LRESULT(0))
+            }
+            ctxmenu::Reply::Pick(choice) => {
+                if let Some((mut m, pin)) = self.ctx_menu.take() {
+                    m.close();
+                    self.pin_choice(pin, choice);
+                }
+                Some(LRESULT(0))
+            }
+            ctxmenu::Reply::Dismiss => {
+                if let Some((mut m, _)) = self.ctx_menu.take() {
+                    m.close();
+                }
+                self.close_if_left();
+                Some(LRESULT(0))
+            }
+        }
+    }
+
+    /// Setelah menu konteks ditutup tanpa aksi: jika kursor sudah di luar notch, jalankan
+    /// tutup-otomatis hover yang tadi ditahan selama menu terbuka.
+    fn close_if_left(&mut self) {
+        if !self.core.is_open() || !self.core.data.settings.open_on_hover {
+            return;
+        }
+        unsafe {
+            let mut p = POINT::default();
+            let _ = GetCursorPos(&mut p);
+            if WindowFromPoint(p) != self.hwnd {
+                self.tracking = false;
+                SetTimer(self.hwnd, T_HOVER_CLOSE, 450, None);
+            }
         }
     }
 
@@ -877,6 +954,9 @@ impl App {
         if let Some(mut m) = self.tray_menu.take() {
             m.close();
         }
+        if let Some((mut m, _)) = self.ctx_menu.take() {
+            m.close();
+        }
         let _ = self.store.save(&self.core.data);
         self.tray.remove();
         self.sys.stop();
@@ -903,6 +983,9 @@ impl App {
         }
         if self.tray_menu.as_ref().map_or(false, |m| m.hwnd == hwnd) {
             return self.on_tray_menu_message(msg, wp, lp);
+        }
+        if self.ctx_menu.as_ref().map_or(false, |(m, _)| m.hwnd == hwnd) {
+            return self.on_ctx_menu_message(msg, wp, lp);
         }
         let s = self.scale();
         let mouse = || {
@@ -1080,7 +1163,8 @@ impl App {
                         unsafe {
                             let _ = KillTimer(self.hwnd, T_HOVER_CLOSE);
                         }
-                        if self.core.is_open() && !self.core.adding_todo && !self.edit.has_focus() {
+                        // Menu konteks terbuka: kursor memang keluar notch untuk memilih item.
+                        if self.core.is_open() && !self.core.adding_todo && !self.edit.has_focus() && self.ctx_menu.is_none() {
                             self.command(Command::Close);
                         }
                     }
@@ -1450,7 +1534,7 @@ pub fn run() {
             cbSize: size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(wndproc),
             hInstance: hinst,
-            lpszClassName: traymenu::CLASS,
+            lpszClassName: crate::glass::POPUP_CLASS,
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             ..Default::default()
         };

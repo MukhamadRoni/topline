@@ -219,8 +219,9 @@ pub fn reveal(target: &str) {
 pub const MENU_REVEAL: usize = 1;
 pub const MENU_ADMIN: usize = 2;
 pub const MENU_UNPIN: usize = 3;
+pub const MENU_OPEN: usize = 4;
 
-/// Menu konteks tile; kembalikan id item (0 = batal).
+/// Menu konteks tile versi Win32 (cadangan jika menu kaca gagal dibuat); id item, 0 = batal.
 pub fn pin_menu(owner: HWND, pin: &Pin, l: Lang) -> usize {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return 0 };

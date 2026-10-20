@@ -104,6 +104,9 @@ pub const G_COLOR: char = '\u{E790}';
 pub const G_INFO: char = '\u{E946}';
 pub const G_CHEVRON_RIGHT: char = '\u{E76C}';
 pub const G_POWER: char = '\u{E7E8}';
+pub const G_OPEN: char = '\u{E8A7}';
+pub const G_ADMIN: char = '\u{E7EF}';
+pub const G_UNPIN: char = '\u{E77A}';
 
 // ---- lirik (DIP)
 /// Notch idle dengan caption lirik di bawah pill.

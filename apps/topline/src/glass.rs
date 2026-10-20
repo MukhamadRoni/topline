@@ -12,7 +12,11 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Dwm::*;
+use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::WinRT::Composition::*;
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Color;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::*;
@@ -25,6 +29,62 @@ const TINT_SOLID: Color = Color { A: 250, R: 11, G: 22, B: 96 };
 
 fn v2(x: f32, y: f32) -> Vector2 {
     Vector2 { X: x, Y: y }
+}
+
+/// Kelas jendela untuk popup kaca (menu tray, menu konteks); didaftarkan di `app::run`.
+pub const POPUP_CLASS: PCWSTR = w!("ToplinePopup");
+
+/// Letak popup terhadap titik jangkar.
+#[derive(Clone, Copy)]
+pub enum Anchor {
+    /// Di atas titik, berpusat horizontal (menu tray di taskbar bawah).
+    Above,
+    /// Di kanan bawah titik seperti menu konteks; dibalik jika tidak muat.
+    Below,
+}
+
+/// Buat jendela popup kaca (topmost, tanpa taskbar) berukuran `w` × `h` DIP di dekat `at`,
+/// tetap di dalam area kerja monitor. Mengembalikan jendela (belum tampil) dan skala DPI-nya.
+pub fn create_popup(at: POINT, w: f32, h: f32, anchor: Anchor) -> Result<(HWND, f32)> {
+    unsafe {
+        let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
+        let hwnd = CreateWindowExW(
+            WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+            POPUP_CLASS,
+            w!("Topline"),
+            WS_POPUP,
+            at.x,
+            at.y,
+            10,
+            10,
+            None,
+            None,
+            hinst,
+            None,
+        )?;
+        prepare_window(hwnd);
+        let dpi = GetDpiForWindow(hwnd);
+        let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };
+        let (pw, ph) = ((w * scale).round() as i32, (h * scale).round() as i32);
+        let mon = MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let _ = GetMonitorInfoW(mon, &mut mi);
+        let r = mi.rcWork;
+        let gap = (8.0 * scale) as i32;
+        let (x, y) = match anchor {
+            Anchor::Above => (
+                (at.x - pw / 2).clamp(r.left + gap, (r.right - pw - gap).max(r.left)),
+                if at.y - ph - gap >= r.top { at.y - ph - gap } else { (at.y + gap).min(r.bottom - ph) },
+            ),
+            Anchor::Below => {
+                let x = if at.x + pw <= r.right { at.x } else { (at.x - pw).max(r.left) };
+                let y = if at.y + 2 + ph <= r.bottom { at.y + 2 } else { (at.y - ph).max(r.top) };
+                (x, y)
+            }
+        };
+        let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, pw, ph, SWP_NOACTIVATE);
+        Ok((hwnd, scale))
+    }
 }
 
 /// Atribut DWM untuk jendela kaca: HostBackdropBrush, mode gelap, sudut membulat, bayangan.

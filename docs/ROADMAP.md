@@ -25,6 +25,7 @@ Kriteria umum untuk setiap item: CPU idle tetap ~0, tanpa polling, build tanpa w
 ## Selesai setelah v0.1
 - 🎤 Lirik tersinkron: tab Lirik (baris aktif, klik untuk lompat) dan caption di bawah pill idle. Sumber: `Artis - Judul.lrc` di folder lirik → cache → LRCLIB (WinHTTP, thread sendiri, hasil di-cache; "tidak ditemukan" dicoba lagi setelah 3 hari). Judul YouTube "Artis - Judul (Official Video)" dibersihkan dulu. Pergantian baris memakai satu timer deadline, bukan ticker.
 - ⚙️ Jendela Pengaturan kaca (bingkai sendiri, keyboard): Umum, Tampilan (termasuk tab yang tampil), Fokus, Air minum, Sholat, Lirik, Tentang. Bisa dibuka dari ikon roda gigi, tray, atau `topline settings [bagian]`.
+- 🧾 Menu konteks kaca untuk tile launcher (Buka, lokasi file, administrator, lepas sematan).
 - 🧾 Menu klik kanan tray kaca (bukan menu Win32 standar): aksi cepat, sakelar yang sering dipakai, jadwal sholat, bahasa, folder data, keluar.
 - 🌐 Dua bahasa (Indonesia/English) untuk notch, Pengaturan, tray, menu, peek, dan installer. Auto mengikuti bahasa Windows; data lama tetap Indonesia.
 - 🚀 Launcher mini (tab kelima): seret aplikasi (.exe, .lnk, aplikasi Store dari Start), file, atau folder ke notch dalam keadaan apa pun. Maks. 8 sematan, duplikat diabaikan, hanya referensi (efek drop LINK). Klik membuka (ShellExecuteEx), seret tile untuk mengatur ulang, klik kanan: buka lokasi file / jalankan sebagai administrator / lepas sematan. Target hilang tampil redup. Ikon di-cache sebagai PNG. RAM +~3 MB dengan 8 sematan.

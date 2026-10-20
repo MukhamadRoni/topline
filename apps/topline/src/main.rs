@@ -3,6 +3,7 @@
 
 mod app;
 mod clip;
+mod ctxmenu;
 mod editbox;
 mod gfx;
 mod glass;

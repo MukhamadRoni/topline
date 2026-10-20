@@ -10,9 +10,6 @@ use std::mem::size_of;
 use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
-use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::UI::Composition::Compositor;
@@ -23,7 +20,6 @@ use crate::gfx::{Align, Font, Gfx, Painter};
 use crate::glass::{self, Glass};
 use crate::theme::*;
 
-pub const CLASS: PCWSTR = w!("ToplineTrayMenu");
 const WM_MOUSELEAVE: u32 = 0x02A3;
 
 /// Logo untuk kepala menu.
@@ -102,34 +98,8 @@ impl TrayMenu {
     /// Buat dan tampilkan menu di dekat titik `at` (posisi kursor saat klik kanan ikon tray).
     pub fn open(compositor: &Compositor, gfx: &Gfx, solid: bool, at: POINT, v: &View) -> Result<Self> {
         unsafe {
-            let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
-            let hwnd = CreateWindowExW(
-                WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-                CLASS,
-                w!("Topline"),
-                WS_POPUP,
-                at.x,
-                at.y,
-                10,
-                10,
-                None,
-                None,
-                hinst,
-                None,
-            )?;
-            glass::prepare_window(hwnd);
-            let dpi = GetDpiForWindow(hwnd);
-            let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };
-            let (w, h) = ((W * scale).round() as i32, (height() * scale).round() as i32);
-            // Di atas kursor (taskbar bawah), digeser agar tetap di dalam area kerja monitor.
-            let mon = MonitorFromPoint(at, MONITOR_DEFAULTTONEAREST);
-            let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
-            let _ = GetMonitorInfoW(mon, &mut mi);
-            let r = mi.rcWork;
-            let gap = (8.0 * scale) as i32;
-            let x = (at.x - w / 2).clamp(r.left + gap, (r.right - w - gap).max(r.left));
-            let y = if at.y - h - gap >= r.top { at.y - h - gap } else { (at.y + gap).min(r.bottom - h) };
-            let _ = SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
+            // Di atas kursor (taskbar bawah), tetap di dalam area kerja monitor.
+            let (hwnd, scale) = glass::create_popup(at, W, height(), glass::Anchor::Above)?;
             let glass = match Glass::new(compositor, gfx, hwnd, W, height(), scale, solid) {
                 Ok(g) => g,
                 Err(e) => {
