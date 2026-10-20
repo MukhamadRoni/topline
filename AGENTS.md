@@ -77,6 +77,11 @@ apps/topline/src/
   editbox.rs               input to-do inline: jendela popup kecil berisi kontrol EDIT standar
   lyrics.rs                thread lirik: folder lirik pengguna → cache (lyrics\cache\<hash>.lrc/.txt/.inst/.none)
                            → LRCLIB /api/search lewat WinHTTP; hasil → WM_APP_LYRICS (Box<Reply>)
+  glass.rs                 Glass: kaca untuk jendela tambahan (DesktopWindowTarget di compositor notch,
+                           HostBackdropBrush + tint, surface D2D, animasi muncul); prepare_window() untuk DWM
+  traymenu.rs              menu klik kanan ikon tray: popup kaca (logo, aksi, sakelar, sholat, bahasa, keluar);
+                           sakelar/bahasa tidak menutup menu, klik di luar (WA_INACTIVE) atau Esc menutup.
+                           tray::show_menu (menu Win32) hanya cadangan jika popup gagal dibuat
   settings.rs              jendela Pengaturan: kaca Composition sendiri, bingkai sendiri (WM_NCCALCSIZE di
                            settings_wndproc), kontrol digambar sendiri (sakelar, stepper, chip, segmen bahasa),
                            keyboard (Tab/Enter/Spasi/←→/↑↓/Esc)

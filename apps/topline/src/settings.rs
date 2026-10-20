@@ -8,26 +8,18 @@
 use std::mem::size_of;
 
 use windows::core::*;
-use windows::Foundation::Numerics::Vector2;
-use windows::Foundation::Size;
-use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
 use windows::Win32::Foundation::*;
-use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
-use windows::Win32::Graphics::Direct2D::*;
-use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::WinRT::Composition::*;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::UI::Color;
-use windows::UI::Composition::Desktop::DesktopWindowTarget;
-use windows::UI::Composition::*;
+use windows::UI::Composition::Compositor;
 
 use topline_core::{Lang, Language, Number, Settings, Toggle, Widget};
 
 use crate::gfx::{Align, Font, Gfx, Painter};
+use crate::glass::{self, Glass};
 use crate::theme::*;
 
 pub const CLASS: PCWSTR = w!("ToplineSettings");
@@ -155,21 +147,9 @@ impl Hit {
     }
 }
 
-fn v2(x: f32, y: f32) -> Vector2 {
-    Vector2 { X: x, Y: y }
-}
-
 pub struct SettingsWindow {
     pub hwnd: HWND,
-    _target: DesktopWindowTarget,
-    backdrop: SpriteVisual,
-    tint: CompositionColorBrush,
-    content: SpriteVisual,
-    graphics: CompositionGraphicsDevice,
-    surface: CompositionDrawingSurface,
-    surface_brush: CompositionSurfaceBrush,
-    has_backdrop: bool,
-    pub scale: f32,
+    glass: Glass,
     pub section: Section,
     hits: Vec<Hit>,
     hover: Option<SAction>,
@@ -197,73 +177,18 @@ impl SettingsWindow {
                 hinst,
                 None,
             )?;
-            let on: BOOL = TRUE;
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_HOSTBACKDROPBRUSH, &on as *const _ as *const _, size_of::<BOOL>() as u32);
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &on as *const _ as *const _, size_of::<BOOL>() as u32);
-            let corner = DWMWCP_ROUND;
-            let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as *const _, size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32);
-            // Bayangan DWM untuk jendela tanpa bingkai.
-            let m = windows::Win32::UI::Controls::MARGINS { cxLeftWidth: 0, cxRightWidth: 0, cyTopHeight: 1, cyBottomHeight: 0 };
-            let _ = DwmExtendFrameIntoClientArea(hwnd, &m);
-
+            glass::prepare_window(hwnd);
             let dpi = GetDpiForWindow(hwnd);
             let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };
             Self::center(hwnd, scale);
-
-            let desktop: ICompositorDesktopInterop = compositor.cast()?;
-            let target = desktop.CreateDesktopWindowTarget(hwnd, false)?;
-            let root = compositor.CreateContainerVisual()?;
-            root.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-            target.SetRoot(&root)?;
-
-            let backdrop = compositor.CreateSpriteVisual()?;
-            backdrop.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-            let has_backdrop = match compositor.CreateHostBackdropBrush() {
-                Ok(b) => {
-                    backdrop.SetBrush(&b)?;
-                    true
+            let glass = match Glass::new(compositor, gfx, hwnd, W, H, scale, solid) {
+                Ok(g) => g,
+                Err(e) => {
+                    let _ = DestroyWindow(hwnd);
+                    return Err(e);
                 }
-                Err(_) => false,
             };
-            root.Children()?.InsertAtTop(&backdrop)?;
-            let tint = compositor.CreateColorBrush()?;
-            let tint_v = compositor.CreateSpriteVisual()?;
-            tint_v.SetRelativeSizeAdjustment(v2(1.0, 1.0))?;
-            tint_v.SetBrush(&tint)?;
-            root.Children()?.InsertAtTop(&tint_v)?;
-
-            let interop: ICompositorInterop = compositor.cast()?;
-            let graphics = interop.CreateGraphicsDevice(&gfx.d2d_device)?;
-            let surface = graphics.CreateDrawingSurface(
-                Size { Width: W * scale, Height: H * scale },
-                DirectXPixelFormat::B8G8R8A8UIntNormalized,
-                DirectXAlphaMode::Premultiplied,
-            )?;
-            let surface_brush = compositor.CreateSurfaceBrushWithSurface(&surface)?;
-            let content = compositor.CreateSpriteVisual()?;
-            content.SetBrush(&surface_brush)?;
-            content.SetSize(v2(W * scale, H * scale))?;
-            root.Children()?.InsertAtTop(&content)?;
-
-            let mut sw = Self {
-                hwnd,
-                _target: target,
-                backdrop,
-                tint,
-                content,
-                graphics,
-                surface,
-                surface_brush,
-                has_backdrop,
-                scale,
-                section,
-                hits: Vec::new(),
-                hover: None,
-                focus: None,
-                tracking: false,
-            };
-            sw.set_solid(solid)?;
-            Ok(sw)
+            Ok(Self { hwnd, glass, section, hits: Vec::new(), hover: None, focus: None, tracking: false })
         }
     }
 
@@ -297,21 +222,7 @@ impl SettingsWindow {
     }
 
     pub fn set_solid(&mut self, solid: bool) -> Result<()> {
-        let glass = self.has_backdrop && !solid;
-        self.backdrop.SetOpacity(if glass { 1.0 } else { 0.0 })?;
-        // lebih pekat dari notch agar teks panjang tetap terbaca
-        self.tint.SetColor(if glass { Color { A: 196, R: 9, G: 13, B: 34 } } else { Color { A: 250, R: 11, G: 22, B: 96 } })
-    }
-
-    fn set_scale(&mut self, scale: f32) -> Result<()> {
-        self.scale = scale;
-        self.surface = self.graphics.CreateDrawingSurface(
-            Size { Width: W * scale, Height: H * scale },
-            DirectXPixelFormat::B8G8R8A8UIntNormalized,
-            DirectXAlphaMode::Premultiplied,
-        )?;
-        self.surface_brush.SetSurface(&self.surface)?;
-        self.content.SetSize(v2(W * scale, H * scale))
+        self.glass.set_solid(solid)
     }
 
     pub fn close(&mut self) {
@@ -323,42 +234,27 @@ impl SettingsWindow {
     // ---------------------------------------------------------------- gambar
 
     pub fn draw(&mut self, gfx: &Gfx, v: &View) {
-        let interop: ICompositionDrawingSurfaceInterop = match self.surface.cast() {
-            Ok(i) => i,
-            Err(_) => return,
-        };
-        let mut offset = POINT::default();
-        unsafe {
-            let Ok(ctx) = interop.BeginDraw::<ID2D1DeviceContext>(None, &mut offset) else { return };
-            let dpi = 96.0 * self.scale;
-            ctx.SetDpi(dpi, dpi);
-            ctx.SetTransform(&windows::Foundation::Numerics::Matrix3x2 {
-                M11: 1.0,
-                M12: 0.0,
-                M21: 0.0,
-                M22: 1.0,
-                M31: offset.x as f32 / self.scale,
-                M32: offset.y as f32 / self.scale,
-            });
-            ctx.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            ctx.Clear(Some(&D2D1_COLOR_F { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }));
-            let p = Painter { ctx: &ctx, gfx };
-            let mut b = B { p: &p, hits: Vec::new(), hover: self.hover.clone() };
-            draw_all(&mut b, self.section, v);
+        let mut hits = Vec::new();
+        let (hover, focus, section) = (self.hover.clone(), self.focus, self.section);
+        let r = self.glass.draw(gfx, |p| {
+            let mut b = B { p, hits: Vec::new(), hover };
+            draw_all(&mut b, section, v);
             // cincin fokus keyboard
-            if let Some(h) = self.focus.and_then(|i| b.hits.get(i)) {
+            if let Some(h) = focus.and_then(|i| b.hits.get(i)) {
                 let r = (h.h / 2.0).min(16.0);
                 p.stroke_rrect(h.x - 3.0, h.y - 3.0, h.w + 6.0, h.h + 6.0, r + 3.0, SKY, 2.0);
             }
-            self.hits = b.hits;
-            let _ = interop.EndDraw();
+            hits = b.hits;
+        });
+        if r.is_ok() {
+            self.hits = hits;
         }
     }
 
     // ---------------------------------------------------------------- pesan
 
     pub fn on_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Reply {
-        let s = self.scale;
+        let s = self.glass.scale;
         let client = |lp: LPARAM| ((lp.0 & 0xffff) as i16 as f32 / s, ((lp.0 >> 16) & 0xffff) as i16 as f32 / s);
         match msg {
             WM_NCCALCSIZE if wp.0 != 0 => Reply::Done(LRESULT(0)),
@@ -413,7 +309,7 @@ impl SettingsWindow {
             WM_CLOSE => Reply::Act(SAction::Close),
             WM_DPICHANGED => {
                 let dpi = (wp.0 >> 16) & 0xffff;
-                let _ = self.set_scale(dpi as f32 / 96.0);
+                let _ = self.glass.set_scale(dpi as f32 / 96.0);
                 let r = unsafe { &*(lp.0 as *const RECT) };
                 unsafe {
                     let _ = SetWindowPos(self.hwnd, None, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);

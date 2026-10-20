@@ -29,6 +29,7 @@ use crate::gfx::Gfx;
 use crate::launcher::{self, DropEvent, Icons};
 use crate::lyrics::{self, LyricsHandle};
 use crate::settings::{self as setwin, SAction, Section, SettingsWindow};
+use crate::traymenu::{self, TAction, TrayMenu};
 use crate::media::{self, MediaHandle, MediaInfo};
 use crate::notch::Notch;
 use crate::sysmon::{self, SysMon};
@@ -112,6 +113,8 @@ struct App {
     lyrics_worker: LyricsHandle,
     /// Jendela Pengaturan (dibuat saat dibuka, dihancurkan saat ditutup).
     settings_win: Option<SettingsWindow>,
+    /// Menu kaca klik kanan ikon tray (hanya selama terbuka).
+    tray_menu: Option<TrayMenu>,
 }
 
 fn scale_of(hwnd: HWND) -> f32 {
@@ -175,6 +178,7 @@ impl App {
             pending_launch: None,
             lyrics_worker,
             settings_win: None,
+            tray_menu: None,
         };
         // Drag & drop dari Explorer/Start ke notch (UI thread STA, OleInitialize di run()).
         let dt: IDropTarget = launcher::DropTarget::new(hwnd).into();
@@ -435,11 +439,80 @@ impl App {
             if let Some(w) = self.settings_win.as_mut() {
                 let _ = w.set_solid(now_solid);
             }
+            if let Some(m) = &self.tray_menu {
+                m.set_solid(now_solid);
+            }
         }
         if now_clip != clip_on {
             clip::listen(self.hwnd, now_clip);
         }
         self.redraw_settings();
+        self.redraw_tray_menu();
+    }
+
+    // ---------------------------------------------------------------- menu tray
+
+    fn tray_view(&self) -> traymenu::View<'_> {
+        traymenu::View {
+            s: &self.core.data.settings,
+            lang: self.core.lang,
+            autostart: util::autostart_enabled(),
+            prayer_place: self.core.prayer_place(),
+        }
+    }
+
+    fn redraw_tray_menu(&mut self) {
+        let Some(mut m) = self.tray_menu.take() else { return };
+        m.draw(&self.gfx, &self.tray_view());
+        self.tray_menu = Some(m);
+    }
+
+    fn tray_action(&mut self, a: TAction) {
+        if !a.keeps_open() {
+            if let Some(mut m) = self.tray_menu.take() {
+                m.close();
+            }
+        }
+        match a {
+            TAction::Open => self.command(Command::Open(self.core.last_widget)),
+            TAction::AddTodo => self.command(Command::StartAddTodo),
+            TAction::Launcher => self.command(Command::Open(Widget::Launcher)),
+            TAction::Settings => self.open_settings(),
+            TAction::Prayer => self.open_settings_at(Some(Section::Prayer)),
+            TAction::Toggle(t) => self.command(Command::SetToggle(t, !t.get(&self.core.data.settings))),
+            TAction::Autostart => {
+                util::set_autostart(!util::autostart_enabled());
+                self.redraw_settings();
+                self.redraw_tray_menu();
+            }
+            TAction::Language(l) => self.command(Command::SetLanguage(l)),
+            TAction::DataFolder => util::open_folder(&util::data_dir()),
+            TAction::Exit => unsafe {
+                let _ = PostMessageW(self.hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+            },
+        }
+    }
+
+    fn on_tray_menu_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        let m = self.tray_menu.as_mut()?;
+        match m.on_message(msg, wp, lp) {
+            traymenu::Reply::Default => None,
+            traymenu::Reply::Done(r) => Some(r),
+            traymenu::Reply::Redraw => {
+                self.redraw_tray_menu();
+                Some(LRESULT(0))
+            }
+            traymenu::Reply::Act(a) => {
+                self.tray_action(a);
+                Some(LRESULT(0))
+            }
+            traymenu::Reply::Dismiss => {
+                if let Some(mut m) = self.tray_menu.take() {
+                    m.close();
+                }
+                Some(LRESULT(0))
+            }
+        }
     }
 
     fn request_lyrics(&self) {
@@ -500,13 +573,6 @@ impl App {
     }
 
     fn settings_action(&mut self, a: SAction) {
-        let open_dir = |dir: std::path::PathBuf| {
-            let _ = std::fs::create_dir_all(&dir);
-            let w = util::wide(&dir.display().to_string());
-            unsafe {
-                ShellExecuteW(None, w!("open"), PCWSTR(w.as_ptr()), None, None, SW_SHOWNORMAL);
-            }
-        };
         match a {
             SAction::Close => {
                 if let Some(mut w) = self.settings_win.take() {
@@ -535,9 +601,9 @@ impl App {
                 return self.menu_command(id, &st);
             }
             SAction::Locate => watch::locate(self.hwnd),
-            SAction::LyricsFolder => open_dir(lyrics::dir()),
+            SAction::LyricsFolder => util::open_folder(&lyrics::dir()),
             SAction::ClearLyrics => lyrics::clear_cache(),
-            SAction::DataFolder => open_dir(util::data_dir()),
+            SAction::DataFolder => util::open_folder(&util::data_dir()),
         }
         self.redraw_settings();
     }
@@ -733,10 +799,26 @@ impl App {
         self.refresh();
     }
 
+    /// Klik kanan ikon tray: menu kaca; menu Win32 standar hanya jika popup gagal dibuat.
     fn menu(&mut self) {
-        let st = self.menu_state();
-        let id = self.tray.show_menu(&st);
-        self.menu_command(id, &st);
+        if let Some(mut m) = self.tray_menu.take() {
+            m.close();
+            return;
+        }
+        let mut at = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut at);
+        }
+        let opened = TrayMenu::open(self.notch.compositor(), &self.gfx, self.core.data.settings.solid, at, &self.tray_view());
+        match opened {
+            Ok(m) => self.tray_menu = Some(m),
+            Err(e) => {
+                util::log(&format!("tray menu error: {e}"));
+                let st = self.menu_state();
+                let id = self.tray.show_menu(&st);
+                self.menu_command(id, &st);
+            }
+        }
     }
 
     fn menu_state(&self) -> MenuState {
@@ -780,11 +862,7 @@ impl App {
             id if (tray::ID_CITY..tray::ID_CITY + prayer::CITIES.len()).contains(&id) => {
                 self.command(Command::SetPrayerCity(prayer::CITIES[id - tray::ID_CITY].name.to_string()));
             }
-            tray::ID_DATA => unsafe {
-                let dir = util::wide(&util::data_dir().display().to_string());
-                let _ = std::fs::create_dir_all(util::data_dir());
-                ShellExecuteW(None, w!("open"), PCWSTR(dir.as_ptr()), None, None, SW_SHOWNORMAL);
-            },
+            tray::ID_DATA => util::open_folder(&util::data_dir()),
             tray::ID_EXIT => unsafe {
                 let _ = PostMessageW(self.hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
             },
@@ -795,6 +873,9 @@ impl App {
     fn shutdown(&mut self) {
         if let Some(mut w) = self.settings_win.take() {
             w.close();
+        }
+        if let Some(mut m) = self.tray_menu.take() {
+            m.close();
         }
         let _ = self.store.save(&self.core.data);
         self.tray.remove();
@@ -819,6 +900,9 @@ impl App {
         }
         if self.settings_win.as_ref().map_or(false, |w| w.hwnd == hwnd) {
             return self.on_settings_message(msg, wp, lp);
+        }
+        if self.tray_menu.as_ref().map_or(false, |m| m.hwnd == hwnd) {
+            return self.on_tray_menu_message(msg, wp, lp);
         }
         let s = self.scale();
         let mouse = || {
@@ -1359,6 +1443,15 @@ pub fn run() {
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             hIcon: big_icon,
             hIconSm: small_icon,
+            ..Default::default()
+        };
+        RegisterClassExW(&wc);
+        let wc = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(wndproc),
+            hInstance: hinst,
+            lpszClassName: traymenu::CLASS,
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
             ..Default::default()
         };
         RegisterClassExW(&wc);

@@ -102,8 +102,8 @@ dimatikan, mata ikut diam.
 | Sematkan ke launcher | Seret aplikasi/file/folder dari Explorer, Desktop, atau Start ke notch, lalu lepaskan |
 | Atur launcher | Klik tile untuk membuka; seret tile untuk mengubah urutan; klik kanan untuk lokasi file, jalankan sebagai admin, atau lepas sematan |
 | Lirik | Tab **Lirik**; klik baris untuk lompat ke bagian lagu itu |
-| Pengaturan | Ikon roda gigi di notch, tray → **Pengaturan…**, atau `topline settings [lirik]` |
-| Bahasa | Pengaturan → Umum → Bahasa, atau tray → **Bahasa / Language** |
+| Pengaturan | Ikon roda gigi di notch, klik kanan ikon tray (menu cepat: sakelar, bahasa, sholat), atau `topline settings [lirik]` |
+| Bahasa | Pengaturan → Umum → Bahasa, atau klik kanan ikon tray → Auto / ID / EN |
 
 **Jadwal sholat.** Tray → *Jadwal sholat*, lalu pilih kota atau **Lokasi saat ini**.
 Lokasi dibaca sekali dari layanan lokasi Windows lalu disimpan, tanpa pelacakan terus-menerus.

@@ -848,7 +848,7 @@ fn draw_lyrics(b: &mut B, c: &Ctx, x0: f32, y0: f32) {
 // ------------------------------------------------------------------ launcher
 
 /// Ikon kotak 2x2 (tab Launcher, aplikasi tanpa ikon) digambar dengan rrect.
-fn grid_icon(p: &Painter, cx: f32, cy: f32, size: f32, col: Rgba) {
+pub(crate) fn grid_icon(p: &Painter, cx: f32, cy: f32, size: f32, col: Rgba) {
     let cell = size * 0.42;
     let gap = size - cell * 2.0;
     for (i, j) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {

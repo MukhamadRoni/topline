@@ -85,6 +85,15 @@ pub fn log(msg: &str) {
     }
 }
 
+/// Buka folder di Explorer (dibuat dulu jika belum ada).
+pub fn open_folder(dir: &std::path::Path) {
+    let _ = std::fs::create_dir_all(dir);
+    let w = wide(&dir.display().to_string());
+    unsafe {
+        windows::Win32::UI::Shell::ShellExecuteW(None, w!("open"), PCWSTR(w.as_ptr()), None, None, SW_SHOWNORMAL);
+    }
+}
+
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }

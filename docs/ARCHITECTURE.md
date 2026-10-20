@@ -62,7 +62,8 @@ UI thread (STA, DispatcherQueueController, GetMessage loop)
  ├─ EditBox: popup + EDIT (subclass: Enter/Esc/blur → PostMessage)
  ├─ SysMon: daya (WM_POWERBROADCAST), Raw Input (WM_INPUT), AppBar
  ├─ Launcher: IDropTarget (OleInitialize + RegisterDragDrop), ikon shell, ShellExecuteEx
- └─ Jendela Pengaturan: DesktopWindowTarget kedua (compositor yang sama), dibuat saat dibuka
+ ├─ Jendela Pengaturan: DesktopWindowTarget kedua (compositor yang sama), dibuat saat dibuka
+ └─ Menu tray: popup kaca (glass.rs) yang sama, dibuat saat klik kanan dan dihancurkan saat ditutup
 Thread lirik: tidur di recv() → folder/cache/LRCLIB (WinHTTP, HTTPS) → PostMessage(WM_APP_LYRICS)
 Thread media (MTA): GSMTC manager + event sesi → snapshot di Mutex → PostMessage(WM_APP_MEDIA)
 Callback threadpool: NetworkStatusChanged → WM_APP_NET; IAudioEndpointVolumeCallback → WM_APP_VOLUME
