@@ -23,6 +23,7 @@ pub const ID_ADZAN: usize = 10;
 pub const ID_CLIPBOARD: usize = 11;
 pub const ID_PRAYER_OFF: usize = 12;
 pub const ID_PRAYER_LOCATE: usize = 13;
+pub const ID_SCROLL: usize = 14;
 /// ID_CITY + indeks di `prayer::CITIES`.
 pub const ID_CITY: usize = 100;
 
@@ -44,6 +45,7 @@ pub struct MenuState {
     pub prayer_place: String,
     pub adzan: bool,
     pub clipboard: bool,
+    pub scroll: bool,
 }
 
 impl Tray {
@@ -111,6 +113,7 @@ impl Tray {
             sep();
             item(ID_HOVER, "Buka saat kursor mendekat", st.hover);
             item(ID_PERSONALITY, "Mata saat idle (Personality)", st.personality);
+            item(ID_SCROLL, "Gestur scroll di notch", st.scroll);
             item(ID_SOLID, "Mode tanpa kaca (lebih hemat GPU)", st.solid);
             item(ID_AUTOSTART, "Mulai bersama Windows", st.autostart);
             item(ID_CLIPBOARD, "Riwayat clipboard (hanya di memori)", st.clipboard);

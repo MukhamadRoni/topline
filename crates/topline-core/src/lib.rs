@@ -4,10 +4,12 @@
 //! memanggil [`Core::tick`] saat deadline dari [`Core::next_deadline_ms`] tiba,
 //! lalu menggambar ulang berdasarkan state publik di [`Core`].
 
+pub mod gesture;
 pub mod model;
 pub mod parse;
 pub mod prayer;
 
+pub use gesture::{GestureAction, ScrollGestures, ScrollStep, ScrollZone};
 pub use model::*;
 pub use parse::parse_task;
 pub use prayer::PrayerTimes;
@@ -62,6 +64,7 @@ pub const MAX_CLIPS: usize = 20;
 const MAX_CLIP_CHARS: usize = 4000;
 pub const MAX_CLIPS_VISIBLE: usize = 6;
 const CLIP_COPIED_MS: i64 = 1200;
+const TRACK_PEEK_MS: i64 = 1600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -122,13 +125,15 @@ pub enum PeekKind {
     Progress { label: String, percent: Option<u32> },
     ProgressDone { label: String, ok: bool },
     DownloadDone { name: String },
+    /// Ganti lagu lewat gestur scroll; judul kosong sampai snapshot media baru tiba.
+    Track { title: String, next: bool },
 }
 
 impl PeekKind {
     /// Prioritas lebih tinggi menggantikan peek yang sedang tampil.
     pub fn priority(&self) -> u8 {
         match self {
-            PeekKind::Volume { .. } | PeekKind::CapsLock { .. } => 1,
+            PeekKind::Volume { .. } | PeekKind::CapsLock { .. } | PeekKind::Track { .. } => 1,
             PeekKind::Charging { .. } | PeekKind::Unplugged { .. } | PeekKind::NetworkBack | PeekKind::Progress { .. } => 2,
             PeekKind::WaterReminder | PeekKind::DownloadDone { .. } => 3,
             PeekKind::NetworkLost
@@ -142,6 +147,7 @@ impl PeekKind {
     pub fn duration_ms(&self) -> i64 {
         match self {
             PeekKind::Volume { .. } | PeekKind::CapsLock { .. } => 1600,
+            PeekKind::Track { .. } => TRACK_PEEK_MS,
             PeekKind::WaterReminder | PeekKind::TodoDue { .. } | PeekKind::FocusDone | PeekKind::BreakDone => 6000,
             PeekKind::Prayer { .. } => 15_000,
             // tanpa kabar baru selama 30 detik dianggap sudah berhenti
@@ -233,6 +239,7 @@ pub enum Command {
     SetPrayerCity(String),
     SetAdzanSound(bool),
     SetClipboardHistory(bool),
+    SetScrollGestures(bool),
     /// Salin ulang entri riwayat clipboard.
     CopyClip(u64),
     PinClip(u64),
@@ -247,8 +254,8 @@ pub enum SystemEvent {
     Power { on_ac: bool, percent: Option<u32> },
     Network { connected: bool },
     CapsLock { on: bool },
-    /// Status pemutaran media (untuk ekspresi mata).
-    Media { playing: bool },
+    /// Status pemutaran media (ekspresi mata) dan judul lagu (None = tidak ada sesi media).
+    Media { playing: bool, title: Option<String> },
     /// Ada input pengguna (Raw Input saat mata tidur, atau mouse di atas notch).
     UserActivity,
     /// Teks baru di clipboard (sudah disaring dari format rahasia).
@@ -308,6 +315,11 @@ pub struct Core {
     last_network: Option<bool>,
     battery_low_warned: bool,
     media_playing: bool,
+    /// Judul lagu dari snapshot media terakhir (None = tidak ada sesi media).
+    media_title: Option<String>,
+    /// Judul saat gestur ganti lagu dilakukan; peek Track menunggu judul yang berbeda.
+    track_from: Option<String>,
+    pub gestures: ScrollGestures,
     /// Input pengguna terakhir (Clock::ms), dari GetLastInputInfo.
     last_input_ms: Option<i64>,
     pub eye_sleeping: bool,
@@ -355,6 +367,9 @@ impl Core {
             last_network: None,
             battery_low_warned: false,
             media_playing: false,
+            media_title: None,
+            track_from: None,
+            gestures: ScrollGestures::default(),
             last_input_ms: None,
             eye_sleeping: false,
             eye_happy_until: None,
@@ -737,6 +752,10 @@ impl Core {
                     c.pinned = !c.pinned;
                 }
             }
+            Command::SetScrollGestures(on) => {
+                self.data.settings.scroll_gestures = on;
+                fx.save = true;
+            }
             Command::DeleteClip(id) => self.clips.retain(|c| c.id != id),
             Command::ClearClips => self.clips.retain(|c| c.pinned),
         }
@@ -764,6 +783,45 @@ impl Core {
     fn close(&mut self) {
         self.adding_todo = false;
         self.view = if self.peek.is_some() { View::Peek } else { View::Idle };
+    }
+
+    // ---------------------------------------------------------------- gestur
+
+    /// Scroll di notch. Pindah tab dan peek ganti lagu ditangani di sini; volume dan
+    /// perintah media dijalankan lapisan aplikasi dari aksi yang dikembalikan.
+    pub fn scroll(&mut self, zone: ScrollZone, delta: i32, horizontal: bool, shift: bool, now: &Clock) -> Option<GestureAction> {
+        if !self.data.settings.scroll_gestures {
+            return None;
+        }
+        self.note_activity(now);
+        match self.gestures.feed(zone, delta, horizontal, shift, now.ms)? {
+            ScrollStep::Volume(d) => Some(GestureAction::Volume(d)),
+            ScrollStep::Track { next } => {
+                self.media_title.as_ref()?;
+                self.track_from = self.media_title.clone();
+                self.push_peek(PeekKind::Track { title: String::new(), next }, now);
+                Some(GestureAction::Track { next })
+            }
+            ScrollStep::Tab(dir) => {
+                let tabs = self.tabs();
+                let cur = tabs.iter().position(|w| Some(*w) == self.widget())?;
+                let to = (cur as i32 + dir).clamp(0, tabs.len() as i32 - 1) as usize;
+                if to == cur {
+                    return None;
+                }
+                self.adding_todo = false;
+                self.open(tabs[to]);
+                Some(GestureAction::Tab)
+            }
+        }
+    }
+
+    /// Klik tengah di notch: play/pause jika ada sesi media, selain itu mute.
+    pub fn middle_click(&self) -> Option<GestureAction> {
+        if !self.data.settings.scroll_gestures {
+            return None;
+        }
+        Some(if self.media_title.is_some() { GestureAction::PlayPause } else { GestureAction::ToggleMute })
     }
 
     // ---------------------------------------------------------------- system events
@@ -809,7 +867,17 @@ impl Core {
                     }
                 }
             }
-            SystemEvent::Media { playing } => self.media_playing = playing,
+            SystemEvent::Media { playing, title } => {
+                self.media_playing = playing;
+                // Peek Track menunggu judul lagu baru (berbeda dari saat gestur).
+                if let Some(Peek { kind: PeekKind::Track { title: t, .. }, until_ms }) = &mut self.peek {
+                    if let Some(new) = title.as_ref().filter(|n| t.is_empty() && !n.is_empty() && Some(*n) != self.track_from.as_ref()) {
+                        *t = new.clone();
+                        *until_ms = now.ms + TRACK_PEEK_MS;
+                    }
+                }
+                self.media_title = title;
+            }
             SystemEvent::UserActivity => self.note_activity(now),
             SystemEvent::Clipboard { text } => self.add_clip(text),
             SystemEvent::Privacy { camera, mic } => {
@@ -1215,7 +1283,7 @@ mod tests {
         let t0 = clock(10, 0, 0);
         let mut c = eyes_core(&t0);
         assert_eq!(c.eye_mood(&t0), EyeMood::Normal);
-        c.system(SystemEvent::Media { playing: true }, &t0);
+        c.system(SystemEvent::Media { playing: true, title: Some("Lagu".into()) }, &t0);
         assert_eq!(c.eye_mood(&t0), EyeMood::Music);
         c.apply(Command::FocusStartPause, &t0);
         assert_eq!(c.eye_mood(&t0), EyeMood::Focus, "fokus mengalahkan musik");
@@ -1580,5 +1648,56 @@ mod tests {
     #[test]
     fn short_date() {
         assert_eq!(clock(9, 0, 0).short_date_id(), "Sel · 20 Okt");
+    }
+    #[test]
+    fn scroll_volume_and_setting() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        assert_eq!(c.scroll(ScrollZone::Notch, 120, false, false, &t0), Some(GestureAction::Volume(2)));
+        assert_eq!(c.scroll(ScrollZone::Notch, -360, false, false, &t0), Some(GestureAction::Volume(-6)));
+        c.apply(Command::SetScrollGestures(false), &t0);
+        assert_eq!(c.scroll(ScrollZone::Notch, 120, false, false, &t0), None);
+        assert_eq!(c.middle_click(), None);
+    }
+
+    #[test]
+    fn scroll_track_needs_media_and_peek_gets_new_title() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        assert_eq!(c.scroll(ScrollZone::Notch, 120, true, false, &t0), None, "tanpa sesi media");
+        assert_eq!(c.middle_click(), Some(GestureAction::ToggleMute));
+        c.system(SystemEvent::Media { playing: true, title: Some("Lama".into()) }, &t0);
+        assert_eq!(c.middle_click(), Some(GestureAction::PlayPause));
+        let mut t1 = t0;
+        t1.ms += 1000;
+        assert_eq!(c.scroll(ScrollZone::Notch, 120, true, false, &t1), Some(GestureAction::Track { next: true }));
+        let peek = |c: &Core| c.peek.as_ref().map(|p| p.kind.clone());
+        assert_eq!(peek(&c), Some(PeekKind::Track { title: String::new(), next: true }));
+        // snapshot lama datang lagi: judul belum diisi
+        c.system(SystemEvent::Media { playing: true, title: Some("Lama".into()) }, &t1);
+        assert_eq!(peek(&c), Some(PeekKind::Track { title: String::new(), next: true }));
+        c.system(SystemEvent::Media { playing: true, title: Some("Baru".into()) }, &t1);
+        assert_eq!(peek(&c), Some(PeekKind::Track { title: "Baru".into(), next: true }));
+        assert_eq!(c.peek.as_ref().unwrap().until_ms, t1.ms + 1600);
+        // volume (prioritas sama) menggantikan peek lagu
+        c.system(SystemEvent::Volume { percent: 30, muted: false }, &t1);
+        assert!(matches!(peek(&c), Some(PeekKind::Volume { .. })));
+    }
+
+    #[test]
+    fn scroll_switches_tabs_with_bounds() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        assert_eq!(c.scroll(ScrollZone::Tabs, -120, false, false, &t0), None, "tab hanya saat notch terbuka");
+        c.apply(Command::Open(Widget::Music), &t0);
+        let mut t = t0;
+        t.ms += 1000;
+        assert_eq!(c.scroll(ScrollZone::Tabs, 120, false, false, &t), None, "sudah tab pertama");
+        t.ms += 1000;
+        assert_eq!(c.scroll(ScrollZone::Tabs, -120, false, false, &t), Some(GestureAction::Tab));
+        assert_eq!(c.view, View::Expanded(Widget::Focus));
+        t.ms += 100;
+        assert_eq!(c.scroll(ScrollZone::Tabs, -120, false, false, &t), None, "cooldown");
+        assert_eq!(c.view, View::Expanded(Widget::Focus));
     }
 }

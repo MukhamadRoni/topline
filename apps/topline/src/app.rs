@@ -49,6 +49,8 @@ const T_EYE_DEMO: usize = 6;
 
 const ABN_FULLSCREENAPP: u32 = 2;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+/// Bit Shift di LOWORD(wParam) WM_MOUSEWHEEL.
+const MK_SHIFT: usize = 0x0004;
 
 /// WM_COPYDATA dari `topline progress ...`: dwData = "TLPR", isi UTF-8 "status\nlabel".
 const COPYDATA_PROGRESS: usize = 0x544C_5052;
@@ -76,6 +78,8 @@ struct App {
     cover: Option<ID2D1Bitmap>,
     cover_key: String,
     hits: Vec<Hit>,
+    /// Area gestur scroll dari frame terakhir (DIP).
+    scroll_zones: Vec<(f32, f32, f32, f32, ScrollZone)>,
     hover: Option<Action>,
     tracking: bool,
     last_view: View,
@@ -130,6 +134,7 @@ impl App {
             cover: None,
             cover_key: String::new(),
             hits: Vec::new(),
+            scroll_zones: Vec::new(),
             hover: None,
             tracking: false,
             last_view: View::Idle,
@@ -203,7 +208,8 @@ impl App {
     fn refresh(&mut self) {
         let now = util::now();
         let playing = self.media_info.as_ref().map_or(false, |m| m.playing);
-        self.core.system(SystemEvent::Media { playing }, &now);
+        let title = self.media_info.as_ref().map(|m| m.title.clone());
+        self.core.system(SystemEvent::Media { playing, title }, &now);
         let view_changed = self.core.view != self.last_view;
         if view_changed {
             self.hover = None;
@@ -242,6 +248,7 @@ impl App {
         // Raw Input mouse hanya selama mata tidur (input pertama = sapaan).
         self.sys.watch_mouse(self.core.eye_sleeping && frame.eyes.is_some());
         self.hits = frame.hits;
+        self.scroll_zones = frame.scroll;
         self.last_view = self.core.view;
 
         // Region: membesar segera, mengecil setelah animasi selesai.
@@ -375,6 +382,21 @@ impl App {
         }
     }
 
+    /// Jalankan hasil gestur scroll / klik tengah.
+    fn gesture(&mut self, a: GestureAction) {
+        match a {
+            // peek volume datang sendiri dari IAudioEndpointVolumeCallback
+            GestureAction::Volume(d) => self.sys.set_volume_step(d),
+            GestureAction::ToggleMute => self.sys.toggle_mute(),
+            GestureAction::Track { next } => {
+                self.media.command(if next { media::MediaCmd::Next } else { media::MediaCmd::Prev });
+                self.refresh();
+            }
+            GestureAction::PlayPause => self.perform(Action::Media(media::MediaCmd::PlayPause)),
+            GestureAction::Tab => self.refresh(),
+        }
+    }
+
     fn system(&mut self, ev: SystemEvent) {
         let now = util::now();
         let fx = self.core.system(ev, &now);
@@ -415,12 +437,14 @@ impl App {
             prayer_place: self.core.prayer_place(),
             adzan: self.core.data.settings.adzan_sound,
             clipboard: self.core.data.settings.clipboard_history,
+            scroll: self.core.data.settings.scroll_gestures,
         };
         match self.tray.show_menu(&st) {
             tray::ID_OPEN => self.command(Command::Open(self.core.last_widget)),
             tray::ID_ADD_TODO => self.command(Command::StartAddTodo),
             tray::ID_HOVER => self.command(Command::SetOpenOnHover(!st.hover)),
             tray::ID_PERSONALITY => self.command(Command::SetPersonality(!st.personality)),
+            tray::ID_SCROLL => self.command(Command::SetScrollGestures(!st.scroll)),
             tray::ID_SOLID => {
                 self.core.data.settings.solid = !st.solid;
                 let _ = self.notch.set_solid(!st.solid);
@@ -491,7 +515,8 @@ impl App {
                 unsafe {
                     let _ = KillTimer(self.hwnd, T_HOVER_CLOSE);
                 }
-                if self.core.view == View::Idle && self.core.data.settings.open_on_hover {
+                // Kursor yang baru dipakai scroll tidak membuka notch (1,5 s sejak scroll terakhir).
+                if self.core.view == View::Idle && self.core.data.settings.open_on_hover && !self.core.gestures.hover_blocked(util::now().ms) {
                     unsafe {
                         SetTimer(self.hwnd, T_HOVER_OPEN, 140, None);
                     }
@@ -555,6 +580,37 @@ impl App {
                 }
                 Some(LRESULT(0))
             }
+            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+                unsafe {
+                    let _ = KillTimer(self.hwnd, T_HOVER_OPEN);
+                }
+                let delta = ((wp.0 >> 16) & 0xffff) as i16 as i32;
+                let shift = wp.0 & MK_SHIFT != 0;
+                // Koordinat roda adalah koordinat layar.
+                let mut pt = POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 };
+                unsafe {
+                    let _ = ScreenToClient(self.hwnd, &mut pt);
+                }
+                let (x, y) = (pt.x as f32 / s, pt.y as f32 / s);
+                let zone = self.scroll_zones.iter().rev().find(|z| x >= z.0 && x < z.0 + z.2 && y >= z.1 && y < z.1 + z.3).map(|z| z.4);
+                if let Some(zone) = zone {
+                    let now = util::now();
+                    let a = self.core.scroll(zone, delta, msg == WM_MOUSEHWHEEL, shift, &now);
+                    util::log(&format!("wheel h={} delta={} shift={} {:?} -> {:?}", msg == WM_MOUSEHWHEEL, delta, shift, zone, a));
+                    if let Some(a) = a {
+                        self.gesture(a);
+                    }
+                }
+                Some(LRESULT(0))
+            }
+            WM_MBUTTONUP => {
+                if matches!(self.core.view, View::Idle | View::Peek) {
+                    if let Some(a) = self.core.middle_click() {
+                        self.gesture(a);
+                    }
+                }
+                Some(LRESULT(0))
+            }
             WM_RBUTTONUP => {
                 let (x, y) = mouse();
                 if let Some(a) = self.hit_at(x, y).and_then(|h| h.alt.clone()) {
@@ -577,7 +633,7 @@ impl App {
                         unsafe {
                             let _ = KillTimer(self.hwnd, T_HOVER_OPEN);
                         }
-                        if self.core.view == View::Idle {
+                        if self.core.view == View::Idle && !self.core.gestures.hover_blocked(util::now().ms) {
                             self.command(Command::Open(self.core.last_widget));
                         }
                     }

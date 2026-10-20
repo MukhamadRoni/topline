@@ -78,6 +78,8 @@ pub struct Settings {
     pub adzan_sound: bool,
     /// Simpan riwayat teks yang disalin (hanya di memori).
     pub clipboard_history: bool,
+    /// Scroll di notch: volume, ganti lagu, pindah tab; klik tengah: play/pause atau mute.
+    pub scroll_gestures: bool,
 }
 
 impl Default for Settings {
@@ -99,6 +101,7 @@ impl Default for Settings {
             prayer_location: None,
             adzan_sound: true,
             clipboard_history: true,
+            scroll_gestures: true,
         }
     }
 }

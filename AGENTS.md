@@ -50,7 +50,9 @@ crates/topline-core/       SEMUA logika produk, tanpa Windows: Core, Command, Sy
                            View/Widget, FocusState, PeekKind, Persisted/Settings/Todo/WaterDay,
                            parse_task(), Clock, EyeMood (ekspresi mata + jadwal tidur), Clip (riwayat
                            clipboard), ProgressState. prayer.rs: jadwal sholat astronomis + daftar kota.
-                           41 unit test.
+                           gesture.rs: gestur scroll (ScrollAccumulator: akumulasi delta, ambang 120,
+                           cooldown; ScrollGestures: zona → volume/lagu/tab, tahan hover 1,5 s).
+                           51 unit test.
                            JANGAN menambah dependensi Windows di sini.
 crates/topline-store/      Store: data.json dengan tulis atomik (tmp + rename), .bak jika rusak. 3 unit test.
 apps/topline/src/
@@ -97,6 +99,7 @@ docs/                      ARCHITECTURE.md, DESIGN.md, ROADMAP.md
 
 ### Event tambahan
 - `WM_CLIPBOARDUPDATE` → `clip::read_text` → `SystemEvent::Clipboard`. `Effects.clipboard` → `clip::set_text`.
+- `WM_MOUSEWHEEL`/`WM_MOUSEHWHEEL` (koordinat layar → `ScreenToClient` / `scale`) → zona dari `Frame.scroll` → `core.scroll()` → `GestureAction`: volume (`sysmon.set_volume_step`, peek datang dari callback volume), `media.command(Next/Prev)` + peek `Track`, atau pindah tab. `WM_MBUTTONUP` → `core.middle_click()` (play/pause atau `sysmon.toggle_mute`). Hover-open ditahan lewat `core.gestures.hover_blocked(now)` (timestamp, tanpa timer).
 - `WM_APP_PRIVACY` (dari thread watch) → `watch::privacy_scan()` di UI thread → `SystemEvent::Privacy`.
 - `WM_APP_DOWNLOAD` (LPARAM = `Box<String>`, diambil alih penerima) → `SystemEvent::DownloadDone`. `Effects.reveal` → `explorer /select`.
 - `WM_COPYDATA` (dwData `TLPR`, isi `status\nlabel`) dari `topline progress ...` → `SystemEvent::Progress`. Perintah CLI ini tidak pernah menjalankan instance baru.

@@ -87,10 +87,13 @@ dimatikan, mata ikut diam.
 | Aksi | Cara |
 |---|---|
 | Buka/tutup notch | Arahkan kursor ke tengah atas layar, klik notch, atau **Win + Alt + T** |
-| Ganti widget | Tab di bagian bawah notch |
+| Ganti widget | Tab di bagian bawah notch, atau scroll di atas bar tab |
+| Volume | Scroll naik/turun di notch (2% per takik; juga di widget Musik) |
+| Lagu berikutnya/sebelumnya | Scroll ke samping di notch (touchpad, atau **Shift + scroll**) |
+| Play/pause | Klik tengah notch (tanpa musik: mute/unmute) |
 | Tambah tugas | **Tambah tugas**, atau **Win + Alt + N** dari mana saja |
 | Hapus tugas / tutup peek | Klik kanan |
-| Pengaturan | Klik kanan ikon Topline di system tray |
+| Pengaturan | Klik kanan ikon Topline di system tray (gestur scroll bisa dimatikan di sana) |
 
 **Jadwal sholat.** Tray → *Jadwal sholat*, lalu pilih kota atau **Lokasi saat ini**.
 Lokasi dibaca sekali dari layanan lokasi Windows lalu disimpan, tanpa pelacakan terus-menerus.

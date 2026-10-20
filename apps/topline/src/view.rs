@@ -53,6 +53,8 @@ pub struct Frame {
     pub eq: bool,
     /// Mata Personality (visual DWM di notch.rs) dan ekspresinya; None = disembunyikan.
     pub eyes: Option<EyeMood>,
+    /// Area gestur scroll (x, y, w, h, zona); di luar area ini scroll diabaikan.
+    pub scroll: Vec<(f32, f32, f32, f32, ScrollZone)>,
 }
 
 fn todo_body_h(c: &Ctx) -> f32 {
@@ -157,17 +159,28 @@ pub fn draw(p: &Painter, c: &Ctx) -> Frame {
     let mut b = B { p, hits: Vec::new(), hover: c.hover.cloned() };
     let mut edit = None;
     let mut eq = false;
+    let mut scroll = Vec::new();
 
     // Garis tepi kaca + highlight (sudut atas berada di luar layar).
     p.stroke_rrect(nx, -r, w, h + r, r, GLASS_BORDER, 1.0);
 
     match c.core.view {
-        View::Idle => eq = draw_idle(&mut b, c, nx, w),
-        View::Peek => draw_peek(&mut b, c, nx, w),
+        View::Idle => {
+            eq = draw_idle(&mut b, c, nx, w);
+            scroll.push((nx, 0.0, w, h, ScrollZone::Notch));
+        }
+        View::Peek => {
+            draw_peek(&mut b, c, nx, w);
+            scroll.push((nx, 0.0, w, h, ScrollZone::Notch));
+        }
         View::Expanded(wd) => {
             draw_header(&mut b, c, nx);
             let x0 = nx + PAD_X;
             let y0 = PAD_TOP + HEADER_H + GAP;
+            scroll.push((nx, h - PAD_BOTTOM - TABS_H, w, TABS_H + PAD_BOTTOM, ScrollZone::Tabs));
+            if wd == Widget::Music {
+                scroll.push((nx, y0 - GAP / 2.0, w, body_h(c, wd) + GAP, ScrollZone::Music));
+            }
             match wd {
                 Widget::Music => draw_music(&mut b, c, x0, y0),
                 Widget::Focus => draw_focus(&mut b, c, x0, y0),
@@ -180,7 +193,7 @@ pub fn draw(p: &Painter, c: &Ctx) -> Frame {
         }
     }
     let eyes = (c.core.view == View::Idle && c.core.data.settings.personality).then(|| c.core.eye_mood(c.now));
-    Frame { w, h, r, hits: b.hits, edit, eq, eyes }
+    Frame { w, h, r, hits: b.hits, edit, eq, eyes, scroll }
 }
 
 // ------------------------------------------------------------------ idle
@@ -357,6 +370,15 @@ fn draw_peek(b: &mut B, c: &Ctx, nx: f32, w: f32) {
         PeekKind::DownloadDone { name } => {
             p.icon(G_DOWNLOAD, ix, cy, 15.0, SKY);
             text(&format!("Unduhan selesai · {}", name), TEXT_1, w - 62.0);
+        }
+        PeekKind::Track { title, next } => {
+            p.icon(if *next { G_NEXT } else { G_PREV }, ix, cy, 14.0, SKY);
+            let t = match (title.is_empty(), *next) {
+                (false, _) => title.as_str(),
+                (true, true) => "Lagu berikutnya",
+                (true, false) => "Lagu sebelumnya",
+            };
+            text(t, TEXT_1, w - 62.0);
         }
     }
 }

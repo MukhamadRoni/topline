@@ -27,6 +27,7 @@ Kriteria umum untuk setiap item: CPU idle tetap ~0, tanpa polling, build tanpa w
 - Animasi pegas (`SpringVector2NaturalMotionAnimation`) untuk buka/tutup, dan indikator tab yang bergeser.
 
 ## Selesai setelah v0.1
+- 🖱️ Gestur scroll di notch: scroll vertikal = volume (2% per takik, delta touchpad diakumulasi), horizontal / Shift + scroll = lagu berikutnya/sebelumnya (cooldown 450 ms), scroll di bar tab = pindah widget, klik tengah = play/pause (atau mute). Hover tidak membuka notch selama 1,5 s sejak scroll. Peek `Track` dengan judul lagu baru. Bisa dimatikan dari tray.
 - Mata Personality hidup: kedip, 7 ekspresi (`EyeMood`), tidur tanpa polling (deadline core + Raw Input mouse hanya saat tidur), lirikan ke kursor, menghormati "Animation effects" Windows. Semuanya visual DWM, CPU idle tetap ~0. Demo: `TOPLINE_EYE_DEMO=1` (mode debug).
 - Ikon baru dari `assets/logo/logo.jpg`, banner di README.
 - 🕌 Jadwal sholat offline (metode Kemenag, 44 kota per wilayah dari menu tray) dengan widget "Sholat", peek saat waktunya tiba, dan suara adzan opsional (`adzan.wav` di folder data). Opsi "Lokasi saat ini" memakai `Geolocator` Windows (sekali jalan, atas permintaan) dan memberi label kota terdekat. Diuji terhadap jadwal resmi Jakarta dan Surabaya (selisih ≤ 2 menit).
@@ -58,6 +59,6 @@ Urutan di bawah mengikuti kecocokan dengan prinsip Topline (offline, tanpa polli
 
 ## Bug / perbaikan kecil yang diketahui
 - Ikon glyph Segoe Fluent tertentu (`G_TODO` E9D5, `G_BELL` EA8F, `G_KEYBOARD` E92E, `G_BOLT` E945) belum diverifikasi visual di semua state. Periksa di peek dan tab.
-- Tombol next/prev media belum diberi umpan balik visual instan (play/pause sudah optimistis).
+- Tombol next/prev di widget Musik belum diberi umpan balik visual instan (gestur scroll sudah punya peek `Track`; play/pause sudah optimistis).
 - Saat DPI berubah antar monitor, posisi kolom EDIT dihitung ulang, tapi belum diuji di monitor kedua.
 - `README.md` dan `AGENTS.md` perlu diperbarui setiap kali fitur bertambah.

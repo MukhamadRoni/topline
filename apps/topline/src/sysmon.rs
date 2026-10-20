@@ -22,6 +22,8 @@ pub struct SysMon {
     _power: Vec<HPOWERNOTIFY>,
     _net_token: Option<windows::Foundation::EventRegistrationToken>,
     volume: Option<(IAudioEndpointVolume, IAudioEndpointVolumeCallback)>,
+    /// Id perangkat output default saat `volume` dibuat.
+    volume_dev: String,
     appbar: bool,
     hwnd: HWND,
     pub caps_on: bool,
@@ -78,7 +80,10 @@ impl SysMon {
         }))
         .ok();
 
-        let volume = unsafe { Self::start_volume(hwnd).ok() };
+        let (volume, volume_dev) = match unsafe { Self::start_volume(hwnd) } {
+            Ok((v, cb, id)) => (Some((v, cb)), id),
+            Err(_) => (None, String::new()),
+        };
 
         // Caps Lock lewat Raw Input (tanpa hook keyboard global).
         unsafe {
@@ -104,16 +109,74 @@ impl SysMon {
 
         let caps_on = unsafe { (GetKeyState(VK_CAPITAL.0 as i32) & 1) != 0 };
 
-        Self { _power: power, _net_token: net_token, volume, appbar, hwnd, caps_on, caps_down: false, mouse: false }
+        Self { _power: power, _net_token: net_token, volume, volume_dev, appbar, hwnd, caps_on, caps_down: false, mouse: false }
     }
 
-    unsafe fn start_volume(hwnd: HWND) -> Result<(IAudioEndpointVolume, IAudioEndpointVolumeCallback)> {
+    unsafe fn default_device() -> Result<(IMMDevice, String)> {
         let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
+        let p = device.GetId()?;
+        let id = p.to_string().unwrap_or_default();
+        CoTaskMemFree(Some(p.0 as *const _));
+        Ok((device, id))
+    }
+
+    unsafe fn start_volume(hwnd: HWND) -> Result<(IAudioEndpointVolume, IAudioEndpointVolumeCallback, String)> {
+        let (device, id) = Self::default_device()?;
         let vol: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None)?;
         let cb: IAudioEndpointVolumeCallback = VolumeCallback { hwnd: hwnd.0 as isize }.into();
         vol.RegisterControlChangeNotify(&cb)?;
-        Ok((vol, cb))
+        Ok((vol, cb, id))
+    }
+
+    /// Lepas objek volume lama lalu buat ulang untuk perangkat default saat ini.
+    fn restart_volume(&mut self) {
+        unsafe {
+            if let Some((vol, cb)) = self.volume.take() {
+                let _ = vol.UnregisterControlChangeNotify(&cb);
+            }
+            if let Ok((v, cb, id)) = Self::start_volume(self.hwnd) {
+                self.volume = Some((v, cb));
+                self.volume_dev = id;
+            }
+        }
+    }
+
+    /// Jalankan `f` pada volume perangkat default. Perangkat default bisa berganti
+    /// (headset dicolok): objek dibuat ulang jika id berubah, atau sekali jika panggilan gagal.
+    /// Hanya dipanggil dari gestur pengguna, bukan berkala.
+    fn with_volume(&mut self, f: impl Fn(&IAudioEndpointVolume) -> Result<()>) {
+        let current = unsafe { Self::default_device() }.map(|(_, id)| id).ok();
+        if self.volume.is_none() || current.as_ref().map_or(false, |id| *id != self.volume_dev) {
+            self.restart_volume();
+        }
+        let ok = self.volume.as_ref().map_or(false, |(v, _)| f(v).is_ok());
+        if !ok {
+            self.restart_volume();
+            if let Some((v, _)) = &self.volume {
+                let _ = f(v);
+            }
+        }
+    }
+
+    /// Ubah volume master sebanyak `delta` persen (0–100). Menaikkan volume juga membatalkan mute.
+    /// Peek volume muncul sendiri lewat IAudioEndpointVolumeCallback.
+    pub fn set_volume_step(&mut self, delta: i32) {
+        self.with_volume(|v| unsafe {
+            let cur = (v.GetMasterVolumeLevelScalar()? * 100.0).round() as i32;
+            let pct = (cur + delta).clamp(0, 100);
+            if delta > 0 && v.GetMute()?.as_bool() {
+                v.SetMute(false, std::ptr::null())?;
+            }
+            v.SetMasterVolumeLevelScalar(pct as f32 / 100.0, std::ptr::null())
+        });
+    }
+
+    pub fn toggle_mute(&mut self) {
+        self.with_volume(|v| unsafe {
+            let muted = v.GetMute()?.as_bool();
+            v.SetMute(!muted, std::ptr::null())
+        });
     }
 
     /// (terhubung ke AC, persentase baterai jika ada)
