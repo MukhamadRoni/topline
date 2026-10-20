@@ -3,6 +3,8 @@
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::{Lang, Language};
+
 /// Waktu lokal saat ini. Diisi oleh aplikasi (dari `GetLocalTime`), sehingga
 /// core tidak pernah membaca jam sistem sendiri dan mudah diuji.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,18 +35,17 @@ impl Clock {
     pub fn ms_to_next_minute(&self) -> i64 {
         ((60 - self.second as i64) * 1000).max(1000)
     }
-    /// Contoh: "Sel · 20 Okt"
-    pub fn short_date_id(&self) -> String {
-        const DAYS: [&str; 7] = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
-        const MONTHS: [&str; 12] = [
-            "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
-        ];
-        format!(
-            "{} · {} {}",
-            DAYS[(self.weekday % 7) as usize],
-            self.day,
-            MONTHS[((self.month.max(1) - 1) % 12) as usize]
-        )
+    /// Contoh: "Sel · 20 Okt" / "Tue · Oct 20"
+    pub fn short_date(&self, lang: Lang) -> String {
+        const DAYS_ID: [&str; 7] = ["Min", "Sen", "Sel", "Rab", "Kam", "Jum", "Sab"];
+        const DAYS_EN: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const MONTHS_ID: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+        const MONTHS_EN: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let (d, m) = ((self.weekday % 7) as usize, ((self.month.max(1) - 1) % 12) as usize);
+        match lang {
+            Lang::Id => format!("{} · {} {}", DAYS_ID[d], self.day, MONTHS_ID[m]),
+            Lang::En => format!("{} · {} {}", DAYS_EN[d], MONTHS_EN[m], self.day),
+        }
     }
 }
 
@@ -80,6 +81,15 @@ pub struct Settings {
     pub clipboard_history: bool,
     /// Scroll di notch: volume, ganti lagu, pindah tab; klik tengah: play/pause atau mute.
     pub scroll_gestures: bool,
+    /// Cari lirik di LRCLIB jika tidak ada di folder/cache lirik (mengirim judul, artis, durasi).
+    pub lyrics_online: bool,
+    /// Satu baris lirik di bawah pill idle saat musik diputar.
+    pub lyrics_caption: bool,
+    /// Tab yang disembunyikan (kunci `Widget::key`). Musik selalu tampil.
+    pub hidden_tabs: Vec<String>,
+    /// Bahasa UI. Data lama tanpa field ini tetap berbahasa Indonesia; instalasi baru = Auto.
+    #[cfg_attr(feature = "serde", serde(default = "crate::i18n::legacy_language"))]
+    pub language: Language,
 }
 
 impl Default for Settings {
@@ -102,6 +112,10 @@ impl Default for Settings {
             adzan_sound: true,
             clipboard_history: true,
             scroll_gestures: true,
+            lyrics_online: true,
+            lyrics_caption: true,
+            hidden_tabs: Vec::new(),
+            language: Language::Auto,
         }
     }
 }

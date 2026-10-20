@@ -18,7 +18,7 @@ use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use topline_core::{Pin, PinInput, PinKind};
+use topline_core::{Lang, Pin, PinInput, PinKind};
 
 use crate::gfx::Gfx;
 use crate::util;
@@ -221,7 +221,7 @@ pub const MENU_ADMIN: usize = 2;
 pub const MENU_UNPIN: usize = 3;
 
 /// Menu konteks tile; kembalikan id item (0 = batal).
-pub fn pin_menu(owner: HWND, pin: &Pin) -> usize {
+pub fn pin_menu(owner: HWND, pin: &Pin, l: Lang) -> usize {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return 0 };
         let add = |id: usize, text: &str, enabled: bool| {
@@ -229,10 +229,10 @@ pub fn pin_menu(owner: HWND, pin: &Pin) -> usize {
             let flags = MF_STRING | if enabled { MF_ENABLED } else { MF_GRAYED };
             let _ = AppendMenuW(menu, flags, id, PCWSTR(w.as_ptr()));
         };
-        add(MENU_REVEAL, "Buka lokasi file", !pin.target.starts_with("shell:"));
-        add(MENU_ADMIN, "Jalankan sebagai administrator", can_elevate(&pin.target));
+        add(MENU_REVEAL, l.t("Buka lokasi file", "Open file location"), !pin.target.starts_with("shell:"));
+        add(MENU_ADMIN, l.t("Jalankan sebagai administrator", "Run as administrator"), can_elevate(&pin.target));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        add(MENU_UNPIN, "Lepas sematan", true);
+        add(MENU_UNPIN, l.t("Lepas sematan", "Unpin"), true);
         let mut p = POINT::default();
         let _ = GetCursorPos(&mut p);
         let _ = SetForegroundWindow(owner);

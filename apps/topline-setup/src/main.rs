@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;
+use windows::Win32::Globalization::GetUserDefaultUILanguage;
 use windows::Win32::System::Com::*;
 use windows::Win32::System::Registry::*;
 use windows::Win32::UI::Shell::*;
@@ -26,6 +27,17 @@ mod payload {
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const UNINSTALL_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Topline";
 const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+
+/// Installer mengikuti bahasa tampilan Windows: Indonesia jika Windows berbahasa Indonesia,
+/// selain itu Inggris.
+fn t<'a>(id: &'a str, en: &'a str) -> &'a str {
+    // LANG_INDONESIAN = 0x21 (primary language id)
+    if unsafe { GetUserDefaultUILanguage() } & 0x3ff == 0x21 {
+        id
+    } else {
+        en
+    }
+}
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -136,7 +148,7 @@ fn create_shortcut(lnk: &Path, target: &Path, icon: &Path) -> Result<()> {
             sl.SetWorkingDirectory(&HSTRING::from(dir.as_os_str()))?;
         }
         sl.SetIconLocation(&HSTRING::from(icon.as_os_str()), 0)?;
-        sl.SetDescription(h!("Topline - notch hidup untuk Windows"))?;
+        sl.SetDescription(&HSTRING::from(t("Topline - notch hidup untuk Windows", "Topline - a living notch for Windows")))?;
         let pf: IPersistFile = sl.cast()?;
         pf.Save(&HSTRING::from(lnk.as_os_str()), TRUE)?;
     }
@@ -147,7 +159,11 @@ fn install(silent: bool, launch: bool) -> std::result::Result<(), String> {
     let dir = install_dir();
     if !silent {
         let q = format!(
-            "Pasang Topline {VERSION}?\n\nTopline dipasang hanya untuk akun Windows ini (tanpa hak admin) di:\n{}",
+            "{}\n{}",
+            t(
+                &format!("Pasang Topline {VERSION}?\n\nTopline dipasang hanya untuk akun Windows ini (tanpa hak admin) di:"),
+                &format!("Install Topline {VERSION}?\n\nTopline is installed for this Windows account only (no admin rights) in:"),
+            ),
             dir.display()
         );
         if msg(&q, MB_YESNO | MB_ICONQUESTION) != IDYES {
@@ -155,11 +171,13 @@ fn install(silent: bool, launch: bool) -> std::result::Result<(), String> {
         }
     }
     close_running_app();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("Tidak bisa membuat folder {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{} {}: {e}", t("Tidak bisa membuat folder", "Couldn't create folder"), dir.display()))?;
     let exe = dir.join("topline.exe");
     let ico = dir.join("topline.ico");
     let uninst = dir.join("uninstall.exe");
-    write_retry(&exe, payload::APP_EXE).map_err(|e| format!("Tidak bisa menyalin topline.exe: {e}\nTutup Topline lalu coba lagi."))?;
+    write_retry(&exe, payload::APP_EXE).map_err(|e| {
+        format!("{}: {e}\n{}", t("Tidak bisa menyalin topline.exe", "Couldn't copy topline.exe"), t("Tutup Topline lalu coba lagi.", "Close Topline and try again."))
+    })?;
     write_retry(&ico, payload::APP_ICO).map_err(|e| e.to_string())?;
     if let Ok(me) = std::env::current_exe() {
         if me != uninst {
@@ -192,7 +210,10 @@ fn install(silent: bool, launch: bool) -> std::result::Result<(), String> {
 
     let autostart = silent
         || msg(
-            "Jalankan Topline otomatis setiap Windows dimulai?\n\n(Bisa diubah kapan saja lewat ikon Topline di system tray.)",
+            t(
+                "Jalankan Topline otomatis setiap Windows dimulai?\n\n(Bisa diubah kapan saja di Pengaturan Topline.)",
+                "Start Topline automatically with Windows?\n\n(You can change this anytime in Topline Settings.)",
+            ),
             MB_YESNO | MB_ICONQUESTION,
         ) == IDYES;
     if let Some(key) = reg_open(RUN_KEY) {
@@ -212,7 +233,10 @@ fn install(silent: bool, launch: bool) -> std::result::Result<(), String> {
     }
     if !silent {
         msg(
-            "Topline sudah terpasang dan berjalan.\n\nArahkan kursor ke tengah atas layar, atau tekan Win + Alt + T.\nTambah tugas cepat: Win + Alt + N.\nPengaturan ada di ikon Topline di system tray.",
+            t(
+                "Topline sudah terpasang dan berjalan.\n\nArahkan kursor ke tengah atas layar, atau tekan Win + Alt + T.\nTambah tugas cepat: Win + Alt + N.\nPengaturan ada di ikon Topline di system tray.",
+                "Topline is installed and running.\n\nMove the cursor to the top center of the screen, or press Win + Alt + T.\nQuick add task: Win + Alt + N.\nSettings are in the Topline icon in the system tray.",
+            ),
             MB_OK | MB_ICONINFORMATION,
         );
     }
@@ -235,7 +259,7 @@ fn uninstall(silent: bool) -> std::result::Result<(), String> {
             }
         }
     }
-    if !silent && msg("Copot Topline dari komputer ini?", MB_YESNO | MB_ICONQUESTION) != IDYES {
+    if !silent && msg(t("Copot Topline dari komputer ini?", "Uninstall Topline from this computer?"), MB_YESNO | MB_ICONQUESTION) != IDYES {
         return Ok(());
     }
     close_running_app();
@@ -263,14 +287,17 @@ fn uninstall(silent: bool) -> std::result::Result<(), String> {
     if !silent
         && data.exists()
         && msg(
-            "Hapus juga data Topline (daftar tugas, catatan air minum, pengaturan)?",
+            t(
+                "Hapus juga data Topline (daftar tugas, catatan air minum, pengaturan)?",
+                "Also delete Topline data (tasks, water log, settings)?",
+            ),
             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
         ) == IDYES
     {
         let _ = std::fs::remove_dir_all(&data);
     }
     if !silent {
-        msg("Topline sudah dicopot.", MB_OK | MB_ICONINFORMATION);
+        msg(t("Topline sudah dicopot.", "Topline has been uninstalled."), MB_OK | MB_ICONINFORMATION);
     }
     Ok(())
 }
@@ -288,7 +315,7 @@ fn main() {
     };
     if let Err(e) = result {
         if !silent {
-            msg(&format!("Terjadi kesalahan:\n{e}"), MB_OK | MB_ICONERROR);
+            msg(&format!("{}\n{e}", t("Terjadi kesalahan:", "Something went wrong:")), MB_OK | MB_ICONERROR);
         }
         std::process::exit(1);
     }

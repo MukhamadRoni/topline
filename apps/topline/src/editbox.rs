@@ -25,6 +25,8 @@ pub struct EditBox {
     font: HFONT,
     font_px: i32,
     pub visible: bool,
+    /// Teks petunjuk yang sedang dipasang (kosong = belum).
+    pub cue: String,
 }
 
 fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
@@ -130,7 +132,7 @@ impl EditBox {
             let _ = SetWindowSubclass(edit, Some(edit_proc), 1, 0);
             // Batas panjang teks
             SendMessageW(edit, 0x00C5 /* EM_LIMITTEXT */, WPARAM(160), LPARAM(0));
-            Ok(Self { host, edit, font: HFONT::default(), font_px: 0, visible: false })
+            Ok(Self { host, edit, font: HFONT::default(), font_px: 0, visible: false, cue: String::new() })
         }
     }
 
@@ -160,11 +162,18 @@ impl EditBox {
                 face,
             );
             SendMessageW(self.edit, WM_SETFONT, WPARAM(self.font.0 as usize), LPARAM(1));
-            let cue: Vec<u16> = "Nama tugas… tambahkan jam, mis. 16:30".encode_utf16().chain(std::iter::once(0)).collect();
+        }
+        self.font_px = px;
+    }
+
+    /// Teks petunjuk saat kolom kosong (sesuai bahasa UI).
+    pub fn set_cue(&mut self, text: &str) {
+        self.cue = text.to_string();
+        let cue: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
             // EM_SETCUEBANNER
             SendMessageW(self.edit, 0x1501, WPARAM(1), LPARAM(cue.as_ptr() as isize));
         }
-        self.font_px = px;
     }
 
     /// Tampilkan di posisi layar (piksel fisik) dan ambil fokus.

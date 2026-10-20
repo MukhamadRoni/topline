@@ -1,0 +1,8 @@
+[package]
+name = "topline-lyrics"
+description = "Lirik Topline: parser .lrc, baris aktif, pembersihan judul untuk pencarian, pemilihan hasil LRCLIB. Rust murni."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

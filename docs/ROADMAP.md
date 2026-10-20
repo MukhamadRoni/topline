@@ -3,16 +3,12 @@
 Kriteria umum untuk setiap item: CPU idle tetap ~0, tanpa polling, build tanpa warning baru, dan test core ditambah jika ada logika baru.
 
 ## v0.2 (prioritas)
-1. **Lirik tersinkron (offline-first)**
-   - Sumber berurutan: tag `SYLT`/`USLT` file lagu → `.lrc` di sebelah file → cache lokal → opsi "Unduh lirik online" dari LRCLIB (**nonaktif secara default**, hasil di-cache selamanya). Jika LRCLIB dipakai, yang dikirim hanya judul, artis, dan durasi.
-   - Catatan: GSMTC tidak memberikan path file. Untuk pemutar lokal, cari berdasarkan judul/artis di folder Musik pengguna (opsional), atau andalkan cache/opsi online.
-   - UI: widget/tab "Lirik" baru (lihat prototipe: notch terbelah, baris aktif putih 20 px, baris lain 62%, klik baris untuk seek via `TryChangePlaybackPositionAsync`).
-   - Parser `.lrc` dan pemilihan baris aktif ditaruh di crate baru `topline-lyrics` (Rust murni) beserta test.
+1. **Lirik: lanjutan**
+   - Tag `SYLT`/`USLT` dari file lagu lokal (GSMTC tidak memberi path; perlu pencarian di folder Musik).
+   - Gulir lirik tidak tersinkron di tab Lirik (sekarang hanya 5 baris pertama).
 2. **Shelf file**
    - `IDropTarget` dan OLE init sudah ada (launcher). Shelf = area sementara terpisah dari sematan, simpan referensi path (keputusan default), kartu 116 px. Klik membuka (`ShellExecuteW`), seret keluar via `IDropSource` + `IDataObject` (CF_HDROP), klik kanan untuk menghapus.
-3. **Jendela Pengaturan** (native, lihat artboard "Pengaturan" di prototipe)
-   - Opsi: mulai bersama Windows, monitor, menyingkir saat full-screen, cara membuka, Personality, widget aktif, target dan interval air minum, durasi fokus/istirahat, peek sistem.
-   - Semua field sudah ada di `Settings`, kecuali pemilihan monitor dan widget aktif.
+3. **Pengaturan: lanjutan** — pemilihan monitor, opsi menyingkir saat full-screen, UI Automation untuk pembaca layar.
 4. **Turunkan RAM** (sekarang 66–84 MB, target < 40 MB)
    - Profil: perangkat D3D hardware vs WARP, `res_ctx`, font collection, cache text format, WinRT.
    - Coba `SetProcessWorkingSetSize` setelah idle, serta melepas cover bitmap saat tidak ada media.
@@ -27,6 +23,9 @@ Kriteria umum untuk setiap item: CPU idle tetap ~0, tanpa polling, build tanpa w
 - Animasi pegas (`SpringVector2NaturalMotionAnimation`) untuk buka/tutup, dan indikator tab yang bergeser.
 
 ## Selesai setelah v0.1
+- 🎤 Lirik tersinkron: tab Lirik (baris aktif, klik untuk lompat) dan caption di bawah pill idle. Sumber: `Artis - Judul.lrc` di folder lirik → cache → LRCLIB (WinHTTP, thread sendiri, hasil di-cache; "tidak ditemukan" dicoba lagi setelah 3 hari). Judul YouTube "Artis - Judul (Official Video)" dibersihkan dulu. Pergantian baris memakai satu timer deadline, bukan ticker.
+- ⚙️ Jendela Pengaturan kaca (bingkai sendiri, keyboard): Umum, Tampilan (termasuk tab yang tampil), Fokus, Air minum, Sholat, Lirik, Tentang. Bisa dibuka dari ikon roda gigi, tray, atau `topline settings [bagian]`.
+- 🌐 Dua bahasa (Indonesia/English) untuk notch, Pengaturan, tray, menu, peek, dan installer. Auto mengikuti bahasa Windows; data lama tetap Indonesia.
 - 🚀 Launcher mini (tab kelima): seret aplikasi (.exe, .lnk, aplikasi Store dari Start), file, atau folder ke notch dalam keadaan apa pun. Maks. 8 sematan, duplikat diabaikan, hanya referensi (efek drop LINK). Klik membuka (ShellExecuteEx), seret tile untuk mengatur ulang, klik kanan: buka lokasi file / jalankan sebagai administrator / lepas sematan. Target hilang tampil redup. Ikon di-cache sebagai PNG. RAM +~3 MB dengan 8 sematan.
 - 🖱️ Gestur scroll di notch: scroll vertikal = volume (2% per takik, delta touchpad diakumulasi), horizontal / Shift + scroll = lagu berikutnya/sebelumnya (cooldown 450 ms), scroll di bar tab = pindah widget, klik tengah = play/pause (atau mute). Hover tidak membuka notch selama 1,5 s sejak scroll. Peek `Track` dengan judul lagu baru. Bisa dimatikan dari tray.
 - Mata Personality hidup: kedip, 7 ekspresi (`EyeMood`), tidur tanpa polling (deadline core + Raw Input mouse hanya saat tidur), lirikan ke kursor, menghormati "Animation effects" Windows. Semuanya visual DWM, CPU idle tetap ~0. Demo: `TOPLINE_EYE_DEMO=1` (mode debug).
@@ -37,7 +36,7 @@ Kriteria umum untuk setiap item: CPU idle tetap ~0, tanpa polling, build tanpa w
 - ⬇️ `topline progress <start|0-100|done|fail> [label]` untuk melaporkan progress build/skrip, serta peek "Unduhan selesai" dari folder Downloads (`ReadDirectoryChangesW`; klik untuk membukanya di Explorer).
 
 ## Backlog fitur baru (usulan, belum dijadwalkan)
-Urutan di bawah mengikuti kecocokan dengan prinsip Topline (offline, tanpa polling). Item bertanda ⚠ bertentangan dengan prinsip itu dan perlu diputuskan dulu.
+Urutan di bawah mengikuti kecocokan dengan prinsip Topline (offline-first, tanpa polling). Item bertanda ⚠ bertentangan dengan prinsip itu dan perlu diputuskan dulu.
 
 1. 🔔 **Notifikasi WhatsApp/Telegram singkat di notch.** ⚠
    - `UserNotificationListener` (WinRT) butuh izin pengguna dan **identitas paket** (MSIX/sparse package). Ini terkait keputusan MSIX di bagian Distribusi.

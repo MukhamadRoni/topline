@@ -3,7 +3,7 @@
 Baca file ini dulu, lalu `docs/ARCHITECTURE.md`, `docs/DESIGN.md`, dan `docs/ROADMAP.md`.
 
 ## Apa ini
-**Topline** adalah notch "hidup" di tengah atas layar Windows 11. Isinya: pill idle (jam/musik/fokus/mata), widget yang bisa dibuka (Musik, Fokus/Pomodoro, Air minum, To-do), dan "peek" (kabar singkat sistem). Dibuat dengan **Rust native** (Win32 + Windows.UI.Composition + Direct2D/DirectWrite), tanpa WebView, **full offline**, target **0% CPU saat idle**.
+**Topline** adalah notch "hidup" di tengah atas layar Windows 11. Isinya: pill idle (jam/musik/fokus/mata), widget yang bisa dibuka (Musik, Fokus/Pomodoro, Air minum, To-do), dan "peek" (kabar singkat sistem). Dibuat dengan **Rust native** (Win32 + Windows.UI.Composition + Direct2D/DirectWrite), tanpa WebView, **offline-first** (satu-satunya akses jaringan: lirik dari LRCLIB), target **0% CPU saat idle**.
 
 Status: **v0.1 selesai dan teruji** di Windows 11 25H2, 1920x1080, skala 100%:
 - CPU idle 0,000 s/10 s
@@ -11,7 +11,7 @@ Status: **v0.1 selesai dan teruji** di Windows 11 25H2, 1920x1080, skala 100%:
 - topline.exe 820 KB, setup.exe 1,26 MB
 - uji pasang/copot silent lolos
 
-Bahasa UI: **Indonesia**. Komentar kode juga berbahasa Indonesia; ikuti gaya itu.
+Bahasa UI: **Indonesia dan Inggris** (`Settings.language`: auto/id/en). Setiap teks UI ditulis berpasangan di tempat dipakai: `lang.t("Teks", "Text")` (core: `Lang`, view: `c.t(..)`, Pengaturan: `l.t(..)`). Komentar kode tetap berbahasa Indonesia; ikuti gaya itu.
 
 ## Perintah cepat (PowerShell, dari root repo)
 ```powershell
@@ -24,7 +24,7 @@ dist\setup.exe /S /nolaunch                                      # pasang diam-d
 Unit test core (Rust murni, jalan di OS apa pun):
 ```powershell
 $env:RUSTUP_HOME="$PWD\.toolchain\rustup"; $env:CARGO_HOME="$PWD\.toolchain\cargo"; $env:PATH="$env:CARGO_HOME\bin;$env:PATH"
-cargo test -p topline-core -p topline-store
+cargo test -p topline-core -p topline-store -p topline-lyrics
 ```
 
 ### Lingkungan build (penting)
@@ -53,7 +53,12 @@ crates/topline-core/       SEMUA logika produk, tanpa Windows: Core, Command, Sy
                            gesture.rs: gestur scroll (ScrollAccumulator: akumulasi delta, ambang 120,
                            cooldown; ScrollGestures: zona → volume/lagu/tab, tahan hover 1,5 s).
                            Pin/PinKind/PinInput (Persisted.pins), Widget::Launcher, MAX_PINS = 8.
-                           54 unit test.
+                           LyricsState/LyricsResult, Core::caption(), lyrics_visible().
+                           settings.rs: Toggle/Number (batas, langkah, format) untuk jendela Pengaturan.
+                           i18n.rs: Language (auto/id/en) → Lang, Lang::t(id, en).
+                           64 unit test.
+crates/topline-lyrics/     parser .lrc (offset, multi-stempel), baris aktif + next_change, clean_title/queries
+                           (judul YouTube "Artis - Judul"), pick_best (hasil LRCLIB). 5 unit test.
                            JANGAN menambah dependensi Windows di sini.
 crates/topline-store/      Store: data.json dengan tulis atomik (tmp + rename), .bak jika rusak. 3 unit test.
 apps/topline/src/
@@ -70,6 +75,11 @@ apps/topline/src/
                            saat mata tidur), AppBar fullscreen, suara
   tray.rs                  ikon tray + menu
   editbox.rs               input to-do inline: jendela popup kecil berisi kontrol EDIT standar
+  lyrics.rs                thread lirik: folder lirik pengguna → cache (lyrics\cache\<hash>.lrc/.txt/.inst/.none)
+                           → LRCLIB /api/search lewat WinHTTP; hasil → WM_APP_LYRICS (Box<Reply>)
+  settings.rs              jendela Pengaturan: kaca Composition sendiri, bingkai sendiri (WM_NCCALCSIZE di
+                           settings_wndproc), kontrol digambar sendiri (sakelar, stepper, chip, segmen bahasa),
+                           keyboard (Tab/Enter/Spasi/←→/↑↓/Esc)
   launcher.rs              launcher: DropTarget (#[implement(IDropTarget)]), read_items (SHCreateShellItemArray-
                            FromDataObject → path / shell:AppsFolder\AUMID), Icons (IShellItemImageFactory →
                            WIC → PNG di %LOCALAPPDATA%\Topline\icons → ID2D1Bitmap), launch (ShellExecuteEx),
@@ -102,8 +112,12 @@ docs/                      ARCHITECTURE.md, DESIGN.md, ROADMAP.md
    - `T_HOVER_OPEN` 140 ms, `T_HOVER_CLOSE` 450 ms
    - `T_REGION`: mengecilkan region setelah animasi selesai
    - `T_EYE_DEMO`: hanya saat `TOPLINE_EYE_DEMO=1` dalam mode debug (lihat Verifikasi)
+   - `T_LYRIC`: sekali jalan ke pergantian baris lirik berikutnya (hanya saat lirik tampil dan musik diputar)
 
 ### Event tambahan
+- **Lirik.** `on_media()` → `SystemEvent::Track { key }` (judul+artis) → `Effects.fetch_lyrics` → `lyrics_worker.request()` (thread tidur di `recv`). Hasil: `WM_APP_LYRICS` → `SystemEvent::Lyrics`. Baris aktif dihitung dari `MediaInfo::position_now`; `schedule()` memasang satu timer `T_LYRIC` ke pergantian baris berikutnya hanya saat `core.lyrics_visible()` (tab Lirik terbuka atau caption idle, musik diputar). Klik baris → `MediaCmd::Seek` (`TryChangePlaybackPositionAsync`).
+- **Pengaturan.** Tray / ikon roda gigi / `topline settings [bagian]` (`WM_APP_SETTINGS`, WPARAM = indeks bagian) → `App::open_settings_at`. Perubahan lewat `Command::SetToggle/StepNumber/SetTabVisible/SetLanguage`; `App::command` lalu memanggil `sync_settings` (kaca, clipboard listener, bahasa) dan menggambar ulang jendela Pengaturan. Autostart (registry) dan kota (menu `tray::prayer_menu`) ditangani App.
+- **Bahasa.** `App::apply_language()` menyelesaikan `Settings.language` (Auto → `GetUserDefaultUILanguage`, 0x21 = Indonesia) ke `core.lang`, dipanggil saat mulai, setelah setiap command, dan saat `WM_SETTINGCHANGE`. Data lama tanpa field `language` dibaca sebagai Indonesia (`legacy_language`), instalasi baru = Auto. Installer memakai bahasa Windows.
 - **Drag & drop (OLE).** `run()` memanggil `OleInitialize` (tetap STA, kompatibel dengan DispatcherQueue); `App::new` mendaftarkan `launcher::DropTarget` lewat `RegisterDragDrop`, `shutdown()` memanggil `RevokeDragDrop`. Callback IDropTarget berjalan di UI thread → `app::drop_event()` memakai `try_borrow_mut` pada `APP`; jika App sedang dipinjam, event dikirim ulang lewat `WM_APP_DROP` (LPARAM = `Box<DropEvent>`). Enter → `Command::DragEnter` (notch membuka Launcher; region membesar di `refresh()` sebelum animasi), Leave → `DragLeave` (menutup lagi jika dibuka oleh drag), Drop → `AddPins`. Efek drop selalu LINK (COPY jika sumber tidak mengizinkan LINK), tidak pernah MOVE.
 - Launcher: `Effects.launch` → dibuka setelah `refresh()` di `App::command` (`launcher::launch`, gagal → `SystemEvent::LaunchFailed`). Ikon dan keberadaan target hanya dicek di `refresh()` saat widget Launcher tampil. Atur ulang tile: `WM_LBUTTONDOWN` pada `Hit.drag` → `SetCapture`, geser > 6 DIP → `reorder` (pratinjau di view), `WM_LBUTTONUP` → `Command::MovePin`.
 - Setiap kali tampilan berubah, `refresh()` menegaskan ulang `HWND_TOPMOST` (aplikasi yang baru dibuka bisa menyusup di atas notch).
@@ -129,7 +143,7 @@ Fitur baru: tambahkan state/logika di **core** (beserta test), `Command`/`System
 - Ukuran dalam **DIP** di view/theme. `notch.rs` mengalikan dengan `scale`, karena visual DesktopWindowTarget memakai piksel fisik.
 - Notch **tidak boleh mengambil fokus** (`WS_EX_NOACTIVATE`, `MA_NOACTIVATE`). Input teks hanya lewat `editbox.rs`.
 - Warna/ukuran/teks mengikuti `docs/DESIGN.md`: hanya satu tombol utama (pill putih, teks navy) per tampilan; teks kecil minimal 11–12 px.
-- Teks UI berbahasa Indonesia.
+- Teks UI selalu dua bahasa: `lang.t("Indonesia", "English")`. Jangan menulis teks UI satu bahasa.
 - Jalankan `cargo test -p topline-core -p topline-store` setelah mengubah core.
 
 ## Jebakan windows-rs 0.58 yang sudah ditemui
@@ -160,4 +174,4 @@ Fitur baru: tambahkan state/logika di **core** (beserta test), `Command`/`System
 `%LOCALAPPDATA%\Topline\data.json` (Persisted: settings, todos, water, next_id). Field baru di struct `Settings` atau `Persisted` harus punya default (`#[serde(default)]` sudah ada), supaya data lama tetap terbaca.
 
 ## Lanjutkan dari sini
-Lihat `docs/ROADMAP.md`. Prioritas berikutnya: lirik tersinkron offline, shelf file, jendela Pengaturan (termasuk `eye_sleep_minutes`), dan penurunan RAM.
+Lihat `docs/ROADMAP.md`. Prioritas berikutnya: shelf file, penurunan RAM, dan pemilihan monitor.

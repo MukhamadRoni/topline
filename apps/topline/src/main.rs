@@ -6,8 +6,10 @@ mod clip;
 mod editbox;
 mod gfx;
 mod launcher;
+mod lyrics;
 mod media;
 mod notch;
+mod settings;
 mod sysmon;
 mod theme;
 mod tray;
@@ -37,6 +39,10 @@ pub const WM_APP_DOWNLOAD: u32 = WM_APP + 11;
 pub const WM_APP_LOCATION: u32 = WM_APP + 12;
 /// LPARAM = Box<launcher::DropEvent> (dimiliki penerima); hanya jika App sedang dipinjam.
 pub const WM_APP_DROP: u32 = WM_APP + 13;
+/// LPARAM = Box<lyrics::Reply> (dimiliki penerima).
+pub const WM_APP_LYRICS: u32 = WM_APP + 14;
+/// `topline settings [bagian]`: buka jendela Pengaturan. WPARAM = indeks bagian.
+pub const WM_APP_SETTINGS: u32 = WM_APP + 15;
 
 fn main() {
     app::run();

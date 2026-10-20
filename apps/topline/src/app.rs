@@ -27,6 +27,8 @@ use crate::clip;
 use crate::editbox::EditBox;
 use crate::gfx::Gfx;
 use crate::launcher::{self, DropEvent, Icons};
+use crate::lyrics::{self, LyricsHandle};
+use crate::settings::{self as setwin, SAction, Section, SettingsWindow};
 use crate::media::{self, MediaHandle, MediaInfo};
 use crate::notch::Notch;
 use crate::sysmon::{self, SysMon};
@@ -47,6 +49,8 @@ const T_HOVER_CLOSE: usize = 4;
 const T_REGION: usize = 5;
 /// Hanya untuk demo mata (TOPLINE_EYE_DEMO=1, mode debug).
 const T_EYE_DEMO: usize = 6;
+/// Pergantian baris lirik berikutnya (sekali jalan, hanya saat lirik tampil dan musik diputar).
+const T_LYRIC: usize = 7;
 
 const ABN_FULLSCREENAPP: u32 = 2;
 const WM_MOUSELEAVE: u32 = 0x02A3;
@@ -105,6 +109,9 @@ struct App {
     slots: Vec<(f32, f32, f32, f32)>,
     /// Sematan yang dibuka setelah notch selesai digambar ulang (menutup).
     pending_launch: Option<Pin>,
+    lyrics_worker: LyricsHandle,
+    /// Jendela Pengaturan (dibuat saat dibuka, dihancurkan saat ditutup).
+    settings_win: Option<SettingsWindow>,
 }
 
 fn scale_of(hwnd: HWND) -> f32 {
@@ -130,6 +137,7 @@ impl App {
         let tray = Tray::new(host, icon);
         let edit = EditBox::new(hwnd)?;
         let media = media::start(hwnd);
+        let lyrics_worker = lyrics::start(hwnd);
         let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
 
         let mut app = Self {
@@ -165,6 +173,8 @@ impl App {
             reorder: None,
             slots: Vec::new(),
             pending_launch: None,
+            lyrics_worker,
+            settings_win: None,
         };
         // Drag & drop dari Explorer/Start ke notch (UI thread STA, OleInitialize di run()).
         let dt: IDropTarget = launcher::DropTarget::new(hwnd).into();
@@ -177,6 +187,7 @@ impl App {
             scale, app.notch.has_backdrop, app.gfx.geist, app.core.view
         ));
         let _ = app.notch.set_solid(app.core.data.settings.solid);
+        app.apply_language();
         // Status awal (tidak memunculkan peek).
         let (on_ac, pct) = SysMon::power_status();
         app.core.system(SystemEvent::Power { on_ac, percent: pct }, &now);
@@ -363,6 +374,22 @@ impl App {
                     let _ = KillTimer(self.hwnd, T_TICK);
                 }
             }
+            // Lirik: satu deadline ke pergantian baris berikutnya, bukan ticker.
+            let lyric = match (&self.core.lyrics, self.media_info.as_ref()) {
+                (LyricsState::Ready { lyrics, .. }, Some(m)) if self.core.lyrics_visible() => {
+                    let pos = m.position_now(now.ms);
+                    lyrics.next_change(pos).map(|t| (t - pos).max(30) + 20)
+                }
+                _ => None,
+            };
+            match lyric {
+                Some(ms) => {
+                    SetTimer(self.hwnd, T_LYRIC, ms.min(0x7fff_ffff) as u32, None);
+                }
+                None => {
+                    let _ = KillTimer(self.hwnd, T_LYRIC);
+                }
+            }
         }
     }
 
@@ -370,12 +397,164 @@ impl App {
 
     fn command(&mut self, cmd: Command) {
         let now = util::now();
+        let before = (self.core.data.settings.solid, self.core.data.settings.clipboard_history);
         let fx = self.core.apply(cmd, &now);
         self.effects(fx);
         self.refresh();
+        self.sync_settings(before);
         // Buka target setelah notch mulai menutup (ShellExecuteEx bisa butuh waktu).
         if let Some(pin) = self.pending_launch.take() {
             self.launch(&pin, false);
+        }
+    }
+
+    /// Selesaikan `Settings::language` (Auto = ikut Windows) dan terapkan ke semua teks
+    /// di luar view: kolom to-do, judul jendela Pengaturan. Mengembalikan true jika berubah.
+    fn apply_language(&mut self) -> bool {
+        let lang = self.core.data.settings.language.resolve(util::windows_is_indonesian());
+        let changed = lang != self.core.lang || self.edit.cue.is_empty();
+        self.core.lang = lang;
+        if changed {
+            self.edit.set_cue(lang.t("Nama tugas… tambahkan jam, mis. 16:30", "Task name… add a time, e.g. 16:30"));
+            if let Some(w) = &self.settings_win {
+                w.set_title(lang);
+            }
+        }
+        changed
+    }
+
+    /// Efek OS dari perubahan pengaturan (dari tray maupun jendela Pengaturan).
+    fn sync_settings(&mut self, (solid, clip_on): (bool, bool)) {
+        if self.apply_language() {
+            self.refresh();
+        }
+        let s = &self.core.data.settings;
+        let (now_solid, now_clip) = (s.solid, s.clipboard_history);
+        if now_solid != solid {
+            let _ = self.notch.set_solid(now_solid);
+            if let Some(w) = self.settings_win.as_mut() {
+                let _ = w.set_solid(now_solid);
+            }
+        }
+        if now_clip != clip_on {
+            clip::listen(self.hwnd, now_clip);
+        }
+        self.redraw_settings();
+    }
+
+    fn request_lyrics(&self) {
+        if let Some(m) = &self.media_info {
+            self.lyrics_worker.request(lyrics::Query {
+                key: track_key(m),
+                title: m.title.clone(),
+                artist: m.artist.clone(),
+                duration_ms: m.duration_ms,
+                online: self.core.data.settings.lyrics_online,
+            });
+        }
+    }
+
+    // ---------------------------------------------------------------- pengaturan
+
+    fn open_settings(&mut self) {
+        self.open_settings_at(None);
+    }
+
+    fn open_settings_at(&mut self, section: Option<Section>) {
+        if self.core.is_open() {
+            self.command(Command::Close);
+        }
+        if let Some(w) = self.settings_win.as_mut() {
+            if let Some(s) = section {
+                w.nav(s);
+                self.redraw_settings();
+            }
+            if let Some(w) = &self.settings_win {
+                w.show();
+            }
+            return;
+        }
+        match SettingsWindow::open(self.notch.compositor(), &self.gfx, self.core.data.settings.solid, section.unwrap_or(Section::General)) {
+            Ok(w) => {
+                w.set_title(self.core.lang);
+                self.settings_win = Some(w);
+                self.redraw_settings();
+                if let Some(w) = &self.settings_win {
+                    w.show();
+                }
+            }
+            Err(e) => util::log(&format!("settings window error: {e}")),
+        }
+    }
+
+    fn redraw_settings(&mut self) {
+        let Some(w) = self.settings_win.as_mut() else { return };
+        let v = setwin::View {
+            s: &self.core.data.settings,
+            lang: self.core.lang,
+            autostart: util::autostart_enabled(),
+            prayer_place: self.core.prayer_place(),
+            lyrics_cache: if w.section == Section::Lyrics { lyrics::cache_count() } else { 0 },
+        };
+        w.draw(&self.gfx, &v);
+    }
+
+    fn settings_action(&mut self, a: SAction) {
+        let open_dir = |dir: std::path::PathBuf| {
+            let _ = std::fs::create_dir_all(&dir);
+            let w = util::wide(&dir.display().to_string());
+            unsafe {
+                ShellExecuteW(None, w!("open"), PCWSTR(w.as_ptr()), None, None, SW_SHOWNORMAL);
+            }
+        };
+        match a {
+            SAction::Close => {
+                if let Some(mut w) = self.settings_win.take() {
+                    w.close();
+                }
+                return;
+            }
+            SAction::Nav(s) => {
+                if let Some(w) = self.settings_win.as_mut() {
+                    w.nav(s);
+                }
+            }
+            // Perubahan core lewat command: menyimpan, menggambar ulang notch dan jendela ini.
+            SAction::Toggle(t) => return self.command(Command::SetToggle(t, !t.get(&self.core.data.settings))),
+            SAction::Step(n, d) => return self.command(Command::StepNumber(n, d)),
+            SAction::Tab(w) => {
+                let hidden = self.core.data.settings.hidden_tabs.iter().any(|k| k == w.key());
+                return self.command(Command::SetTabVisible(w, hidden));
+            }
+            SAction::Language(l) => return self.command(Command::SetLanguage(l)),
+            SAction::Autostart => util::set_autostart(!util::autostart_enabled()),
+            SAction::ChooseCity => {
+                let st = self.menu_state();
+                let owner = self.settings_win.as_ref().map(|w| w.hwnd).unwrap_or(self.host);
+                let id = tray::prayer_menu(owner, &st);
+                return self.menu_command(id, &st);
+            }
+            SAction::Locate => watch::locate(self.hwnd),
+            SAction::LyricsFolder => open_dir(lyrics::dir()),
+            SAction::ClearLyrics => lyrics::clear_cache(),
+            SAction::DataFolder => open_dir(util::data_dir()),
+        }
+        self.redraw_settings();
+    }
+
+    fn on_settings_message(&mut self, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+        let w = self.settings_win.as_mut()?;
+        match w.on_message(msg, wp, lp) {
+            setwin::Reply::Default => None,
+            setwin::Reply::Done(r) => Some(r),
+            setwin::Reply::Redraw => {
+                self.redraw_settings();
+                Some(LRESULT(0))
+            }
+            setwin::Reply::Act(a) => {
+                self.settings_action(a);
+                Some(LRESULT(0))
+            }
         }
     }
 
@@ -388,7 +567,7 @@ impl App {
 
     fn pin_menu(&mut self, id: u64) {
         let Some(pin) = self.core.data.pins.iter().find(|p| p.id == id).cloned() else { return };
-        let choice = launcher::pin_menu(self.host, &pin);
+        let choice = launcher::pin_menu(self.host, &pin, self.core.lang);
         util::log(&format!("pin menu {} -> {}", pin.id, choice));
         match choice {
             launcher::MENU_REVEAL => {
@@ -459,6 +638,9 @@ impl App {
         if let Some(pin) = fx.launch {
             self.pending_launch = Some(pin);
         }
+        if fx.fetch_lyrics {
+            self.request_lyrics();
+        }
         if let Some(name) = fx.reveal {
             if let Some(dir) = watch::downloads_dir() {
                 let args = util::wide(&format!("/select,\"{}\"", dir.join(name).display()));
@@ -472,8 +654,16 @@ impl App {
     fn perform(&mut self, a: Action) {
         match a {
             Action::Cmd(c) => self.command(c),
+            Action::OpenSettings => self.open_settings(),
             Action::Media(m) => {
                 self.media.command(m);
+                // baris lirik yang diklik langsung disorot
+                if let media::MediaCmd::Seek(ms) = m {
+                    if let Some(mi) = self.media_info.as_mut() {
+                        mi.position_ms = ms;
+                        mi.updated_ms = util::now().ms;
+                    }
+                }
                 // tampilkan perubahan play/pause seketika
                 if m == media::MediaCmd::PlayPause {
                     if let Some(mi) = self.media_info.as_mut() {
@@ -536,11 +726,21 @@ impl App {
                 .and_then(|m| m.thumb.clone())
                 .and_then(|b| self.gfx.decode_image(&b).ok());
         }
+        // Lagu baru → cari liriknya (di thread lirik).
+        let key = self.media_info.as_ref().map(track_key);
+        let fx = self.core.system(SystemEvent::Track { key }, &util::now());
+        self.effects(fx);
         self.refresh();
     }
 
     fn menu(&mut self) {
-        let st = MenuState {
+        let st = self.menu_state();
+        let id = self.tray.show_menu(&st);
+        self.menu_command(id, &st);
+    }
+
+    fn menu_state(&self) -> MenuState {
+        MenuState {
             hover: self.core.data.settings.open_on_hover,
             personality: self.core.data.settings.personality,
             autostart: util::autostart_enabled(),
@@ -551,25 +751,30 @@ impl App {
             adzan: self.core.data.settings.adzan_sound,
             clipboard: self.core.data.settings.clipboard_history,
             scroll: self.core.data.settings.scroll_gestures,
-        };
-        match self.tray.show_menu(&st) {
+            lang: self.core.lang,
+            language: self.core.data.settings.language,
+        }
+    }
+
+    fn menu_command(&mut self, id: usize, st: &MenuState) {
+        match id {
             tray::ID_OPEN => self.command(Command::Open(self.core.last_widget)),
+            tray::ID_SETTINGS => self.open_settings(),
+            tray::ID_LANG_AUTO => self.command(Command::SetLanguage(Language::Auto)),
+            tray::ID_LANG_ID => self.command(Command::SetLanguage(Language::Id)),
+            tray::ID_LANG_EN => self.command(Command::SetLanguage(Language::En)),
             tray::ID_ADD_TODO => self.command(Command::StartAddTodo),
             tray::ID_LAUNCHER => self.command(Command::Open(Widget::Launcher)),
             tray::ID_HOVER => self.command(Command::SetOpenOnHover(!st.hover)),
             tray::ID_PERSONALITY => self.command(Command::SetPersonality(!st.personality)),
             tray::ID_SCROLL => self.command(Command::SetScrollGestures(!st.scroll)),
-            tray::ID_SOLID => {
-                self.core.data.settings.solid = !st.solid;
-                let _ = self.notch.set_solid(!st.solid);
-                let _ = self.store.save(&self.core.data);
+            tray::ID_SOLID => self.command(Command::SetToggle(Toggle::Solid, !st.solid)),
+            tray::ID_AUTOSTART => {
+                util::set_autostart(!st.autostart);
+                self.redraw_settings();
             }
-            tray::ID_AUTOSTART => util::set_autostart(!st.autostart),
             tray::ID_ADZAN => self.command(Command::SetAdzanSound(!st.adzan)),
-            tray::ID_CLIPBOARD => {
-                clip::listen(self.hwnd, !st.clipboard);
-                self.command(Command::SetClipboardHistory(!st.clipboard));
-            }
+            tray::ID_CLIPBOARD => self.command(Command::SetClipboardHistory(!st.clipboard)),
             tray::ID_PRAYER_OFF => self.command(Command::SetPrayerCity(String::new())),
             tray::ID_PRAYER_LOCATE => watch::locate(self.hwnd),
             id if (tray::ID_CITY..tray::ID_CITY + prayer::CITIES.len()).contains(&id) => {
@@ -588,6 +793,9 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        if let Some(mut w) = self.settings_win.take() {
+            w.close();
+        }
         let _ = self.store.save(&self.core.data);
         self.tray.remove();
         self.sys.stop();
@@ -608,6 +816,9 @@ impl App {
     fn on_message(&mut self, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
         if hwnd == self.host {
             return self.on_host_message(msg, wp, lp);
+        }
+        if self.settings_win.as_ref().map_or(false, |w| w.hwnd == hwnd) {
+            return self.on_settings_message(msg, wp, lp);
         }
         let s = self.scale();
         let mouse = || {
@@ -772,7 +983,7 @@ impl App {
                         self.effects(fx);
                         self.refresh();
                     }
-                    T_TICK => self.refresh(),
+                    T_TICK | T_LYRIC => self.refresh(),
                     T_HOVER_OPEN => {
                         unsafe {
                             let _ = KillTimer(self.hwnd, T_HOVER_OPEN);
@@ -815,6 +1026,10 @@ impl App {
             }
             WM_APP_TOGGLE => {
                 self.command(Command::Toggle);
+                Some(LRESULT(0))
+            }
+            WM_APP_SETTINGS => {
+                self.open_settings_at(Section::ALL.get(wp.0).copied());
                 Some(LRESULT(0))
             }
             WM_APP_MEDIA => {
@@ -865,6 +1080,12 @@ impl App {
                 self.system(SystemEvent::DownloadDone { name });
                 Some(LRESULT(0))
             }
+            WM_APP_LYRICS => {
+                // Box<lyrics::Reply> dari thread lirik.
+                let r = unsafe { *Box::from_raw(lp.0 as *mut lyrics::Reply) };
+                self.system(SystemEvent::Lyrics { key: r.key, result: r.result });
+                Some(LRESULT(0))
+            }
             WM_APP_DROP => {
                 // Box<DropEvent> dari launcher::DropTarget saat App sedang dipinjam.
                 let ev = unsafe { *Box::from_raw(lp.0 as *mut DropEvent) };
@@ -887,12 +1108,17 @@ impl App {
                 let msg = String::from_utf8_lossy(bytes);
                 let (state, label) = msg.split_once('\n').unwrap_or((&msg, ""));
                 if let Some(state) = ProgressState::parse(state) {
-                    let label = if label.trim().is_empty() { "Proses".to_string() } else { label.trim().to_string() };
+                    let label = if label.trim().is_empty() { self.core.lang.t("Proses", "Process").to_string() } else { label.trim().to_string() };
                     self.system(SystemEvent::Progress { label, state });
                 }
                 Some(LRESULT(1))
             }
             WM_SETTINGCHANGE => {
+                // Bahasa tampilan Windows bisa berubah (berlaku untuk Language::Auto).
+                if self.apply_language() {
+                    self.refresh();
+                    self.redraw_settings();
+                }
                 // "Animation effects" bisa diubah kapan saja dari Settings Windows.
                 let motion = util::animations_enabled();
                 if motion != self.eye_motion {
@@ -984,6 +1210,20 @@ impl App {
     }
 }
 
+/// Kunci lagu untuk lirik: judul + artis.
+fn track_key(m: &MediaInfo) -> String {
+    format!("{}\u{1}{}", m.title, m.artist)
+}
+
+/// Jendela Pengaturan memakai bingkai sendiri: area klien = seluruh jendela. Ditangani di
+/// sini tanpa meminjam App, karena WM_NCCALCSIZE juga datang saat jendela sedang dibuat.
+unsafe extern "system" fn settings_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == WM_NCCALCSIZE && wp.0 != 0 {
+        return LRESULT(0);
+    }
+    wndproc(hwnd, msg, wp, lp)
+}
+
 /// Dipanggil dari callback IDropTarget (UI thread). Jika App sedang dipinjam (callback
 /// terjadi di dalam penanganan pesan lain), event dikirim ulang lewat WM_APP_DROP.
 pub fn drop_event(hwnd: HWND, ev: DropEvent) {
@@ -1016,6 +1256,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
+/// Pesan galat sebelum App ada: ikut bahasa Windows.
+fn tr<'a>(id: &'a str, en: &'a str) -> &'a str {
+    if util::windows_is_indonesian() {
+        id
+    } else {
+        en
+    }
+}
+
 fn fatal(msg: &str) {
     let w = util::wide(msg);
     unsafe {
@@ -1042,6 +1291,10 @@ pub fn run() {
     if args.get(1).map(String::as_str) == Some("progress") {
         return send_progress(&args[2..]);
     }
+    // `topline settings [bagian]`: buka Pengaturan (di instance yang berjalan, atau setelah mulai).
+    let settings_arg = (args.get(1).map(String::as_str) == Some("settings"))
+        .then(|| args.get(2).and_then(|s| Section::from_arg(s)).unwrap_or(Section::General));
+    let settings_msg = settings_arg.map(|s| Section::ALL.iter().position(|x| *x == s).unwrap_or(0));
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
@@ -1049,7 +1302,16 @@ pub fn run() {
         let _mutex = CreateMutexW(None, TRUE, w!("Local\\Topline.SingleInstance"));
         if GetLastError() == ERROR_ALREADY_EXISTS {
             if let Ok(h) = FindWindowW(CLASS_NOTCH, None) {
-                let _ = PostMessageW(h, WM_APP_TOGGLE, WPARAM(0), LPARAM(0));
+                let _ = match settings_msg {
+                    Some(i) => {
+                        // izinkan jendela Pengaturan tampil di depan
+                        let mut pid = 0u32;
+                        GetWindowThreadProcessId(h, Some(&mut pid));
+                        let _ = AllowSetForegroundWindow(pid);
+                        PostMessageW(h, WM_APP_SETTINGS, WPARAM(i), LPARAM(0))
+                    }
+                    None => PostMessageW(h, WM_APP_TOGGLE, WPARAM(0), LPARAM(0)),
+                };
             }
             return;
         }
@@ -1063,7 +1325,7 @@ pub fn run() {
         };
         let _dq = match CreateDispatcherQueueController(opts) {
             Ok(c) => c,
-            Err(e) => return fatal(&format!("Gagal menyiapkan compositor Windows: {e}")),
+            Err(e) => return fatal(&format!("{}: {e}", tr("Gagal menyiapkan compositor Windows", "Couldn't set up the Windows compositor"))),
         };
 
         let hinst: HINSTANCE = match GetModuleHandleW(None) {
@@ -1085,8 +1347,22 @@ pub fn run() {
         let ex = WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE;
         let hwnd = match CreateWindowExW(ex, CLASS_NOTCH, w!("Topline"), WS_POPUP, 0, 0, 640, 540, None, None, hinst, None) {
             Ok(h) => h,
-            Err(e) => return fatal(&format!("Gagal membuat jendela: {e}")),
+            Err(e) => return fatal(&format!("{}: {e}", tr("Gagal membuat jendela", "Couldn't create the window"))),
         };
+        let big_icon = util::icon_from_ico(embedded::APP_ICON, GetSystemMetrics(SM_CXICON));
+        let small_icon = util::icon_from_ico(embedded::APP_ICON, GetSystemMetrics(SM_CXSMICON));
+        let wc = WNDCLASSEXW {
+            cbSize: size_of::<WNDCLASSEXW>() as u32,
+            lpfnWndProc: Some(settings_wndproc),
+            hInstance: hinst,
+            lpszClassName: setwin::CLASS,
+            hCursor: LoadCursorW(None, IDC_ARROW).unwrap_or_default(),
+            hIcon: big_icon,
+            hIconSm: small_icon,
+            ..Default::default()
+        };
+        RegisterClassExW(&wc);
+
         let host = CreateWindowExW(WS_EX_TOOLWINDOW, CLASS_HOST, w!("Topline tray"), WS_POPUP, 0, 0, 0, 0, None, None, hinst, None)
             .unwrap_or_default();
 
@@ -1097,8 +1373,13 @@ pub fn run() {
         let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner as *const _ as *const _, size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32);
 
         match App::new(hwnd, host) {
-            Ok(app) => APP.with(|a| *a.borrow_mut() = Some(app)),
-            Err(e) => return fatal(&format!("Topline gagal dimulai: {e}")),
+            Ok(app) => {
+                APP.with(|a| *a.borrow_mut() = Some(app));
+                if let Some(i) = settings_msg {
+                    let _ = PostMessageW(hwnd, WM_APP_SETTINGS, WPARAM(i), LPARAM(0));
+                }
+            }
+            Err(e) => return fatal(&format!("{}: {e}", tr("Topline gagal dimulai", "Topline failed to start"))),
         }
 
         let mut msg = MSG::default();

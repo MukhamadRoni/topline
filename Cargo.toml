@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/topline-core", "crates/topline-store", "apps/topline", "apps/topline-setup"]
+members = ["crates/topline-core", "crates/topline-lyrics", "crates/topline-store", "apps/topline", "apps/topline-setup"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,7 @@ windows = "0.58"
 windows-core = "0.58"
 topline-core = { path = "crates/topline-core" }
 topline-store = { path = "crates/topline-store" }
+topline-lyrics = { path = "crates/topline-lyrics" }
 
 [profile.release]
 opt-level = "s"

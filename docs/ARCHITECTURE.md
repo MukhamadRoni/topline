@@ -18,7 +18,8 @@
 | 2 | Autostart lewat `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (tanpa admin) |
 | 3 | Hotkey `RegisterHotKey`: Win+Alt+T (buka/tutup), Win+Alt+N (tambah tugas) |
 | 4 | Per-Monitor DPI Aware v2 (manifest + `SetProcessDpiAwarenessContext`) |
-| 5 | Full offline. Lirik nanti dari file lokal; LRCLIB hanya opsi yang nonaktif secara default, hasilnya di-cache |
+| 5 | Offline-first. Satu-satunya akses jaringan: lirik dari LRCLIB (aktif secara default atas keputusan pemilik, bisa dimatikan; hanya judul, artis, durasi; di-cache). File `.lrc` pengguna dipakai lebih dulu |
+| 11 | Dua bahasa UI (Indonesia, Inggris), teks berpasangan di tempat dipakai (`Lang::t`). Auto mengikuti bahasa tampilan Windows |
 | 6 | Hanya Windows 11 (22H2 ke atas) |
 | 7 | Input to-do inline lewat kontrol EDIT standar di jendela popup kecil di atas baris; notch tidak pernah mengambil fokus |
 | 8 | Installer per-user buatan sendiri (Rust) ke `%LOCALAPPDATA%\Programs\Topline` |
@@ -60,7 +61,9 @@ UI thread (STA, DispatcherQueueController, GetMessage loop)
  ├─ Notch/Gfx/View: Composition + D2D
  ├─ EditBox: popup + EDIT (subclass: Enter/Esc/blur → PostMessage)
  ├─ SysMon: daya (WM_POWERBROADCAST), Raw Input (WM_INPUT), AppBar
- └─ Launcher: IDropTarget (OleInitialize + RegisterDragDrop), ikon shell, ShellExecuteEx
+ ├─ Launcher: IDropTarget (OleInitialize + RegisterDragDrop), ikon shell, ShellExecuteEx
+ └─ Jendela Pengaturan: DesktopWindowTarget kedua (compositor yang sama), dibuat saat dibuka
+Thread lirik: tidur di recv() → folder/cache/LRCLIB (WinHTTP, HTTPS) → PostMessage(WM_APP_LYRICS)
 Thread media (MTA): GSMTC manager + event sesi → snapshot di Mutex → PostMessage(WM_APP_MEDIA)
 Callback threadpool: NetworkStatusChanged → WM_APP_NET; IAudioEndpointVolumeCallback → WM_APP_VOLUME
 Thread privacy: tidur di WaitForMultipleObjects (event registry + stop) → WM_APP_PRIVACY
@@ -82,19 +85,22 @@ Thread downloads: tidur di ReadDirectoryChangesW → WM_APP_DOWNLOAD
 | Kamera/mikrofon | Thread `privacy`: `RegNotifyChangeKeyValue` pada `HKCU\...\CapabilityAccessManager\ConsentStore\{webcam,microphone}` (subtree). `LastUsedTimeStop == 0` = sedang dipakai |
 | Unduhan | Thread `downloads`: `ReadDirectoryChangesW` (FILE_NAME) di folder Downloads; rename dari `.crdownload/.part/.partial/.download/.opdownload` ke nama akhir = selesai |
 | Drag & drop ke notch | OLE `IDropTarget` di jendela notch; item dibaca dengan `SHCreateShellItemArrayFromDataObject` (CF_HDROP dan Shell IDList Array, termasuk aplikasi Store dari Start). Hanya referensi yang disimpan (`Persisted.pins`) |
+| Lirik | Lagu baru dari GSMTC → thread lirik; `GET https://lrclib.net/api/search` (User-Agent Topline/versi). Pergantian baris lewat satu timer deadline |
+| Bahasa Windows | `GetUserDefaultUILanguage` (saat mulai dan `WM_SETTINGCHANGE`) untuk `Language::Auto` |
 | Progress | `topline progress ...` mengirim `WM_COPYDATA` ke instance yang berjalan |
 | Lokasi (jadwal sholat) | `Geolocator.GetGeopositionAsync` sekali jalan saat pengguna memilih "Lokasi saat ini"; zona waktu dari `GetTimeZoneInformation`. Tanpa pelacakan berkala |
 | Gestur scroll | `WM_MOUSEWHEEL` / `WM_MOUSEHWHEEL` / `WM_MBUTTONUP` di jendela notch (Windows mengirim roda ke jendela di bawah kursor). Volume diubah lewat `IAudioEndpointVolume`; objek dibuat ulang jika perangkat default berganti (dicek hanya saat gestur) |
 | Suara | `PlaySound` alias `Notification.Reminder` / `Notification.Default` |
 
 ## Model core
-- `View`: `Idle` | `Peek` | `Expanded(Widget)`; `Widget`: Music, Focus, Water, Todo, Launcher, Prayer, Clipboard. `Core::tabs()` menyembunyikan Sholat (tanpa kota) dan Clipboard (riwayat nonaktif).
+- `View`: `Idle` | `Peek` | `Expanded(Widget)`; `Widget`: Music, Lyrics, Focus, Water, Todo, Launcher, Prayer, Clipboard. `Core::tabs()` menyembunyikan Sholat (tanpa kota), Clipboard (riwayat nonaktif), dan tab di `Settings.hidden_tabs` (Musik selalu tampil).
 - Jadwal sholat (`prayer.rs`): posisi matahari (algoritme praytimes.org), Subuh -20°, Isya -18°, Ashar Syafi'i, ihtiyath +2 menit, Imsak = Subuh - 10 menit. Hanya waktu terakhir yang lewat yang diingatkan (mis. setelah sleep).
-- `Command`: Toggle, Open, Close, Switch, FocusStartPause/Reset/Skip, AddWater, UndoWater, ToggleTodo, DeleteTodo, StartAddTodo, SubmitTodo, CancelAddTodo, SetPersonality, SetOpenOnHover, SetScrollGestures, ActivatePeek, DismissPeek, DragEnter, DragLeave, AddPins, RemovePin, MovePin, LaunchPin, AskRemovePin. Gestur scroll lewat `Core::scroll()` / `Core::middle_click()` (bukan Command) yang mengembalikan `GestureAction`.
-- `SystemEvent`: Volume, Power, Network, CapsLock, Media, UserActivity, Clipboard, Privacy, Progress, DownloadDone, Location. Event pertama Power/Network hanya mencatat status awal, tanpa peek.
+- `Command`: Toggle, Open, Close, Switch, FocusStartPause/Reset/Skip, AddWater, UndoWater, ToggleTodo, DeleteTodo, StartAddTodo, SubmitTodo, CancelAddTodo, SetPersonality, SetOpenOnHover, SetScrollGestures, ActivatePeek, DismissPeek, DragEnter, DragLeave, AddPins, RemovePin, MovePin, LaunchPin, AskRemovePin, SetToggle, StepNumber, SetTabVisible, SetLanguage. Gestur scroll lewat `Core::scroll()` / `Core::middle_click()` (bukan Command) yang mengembalikan `GestureAction`.
+- `SystemEvent`: Volume, Power, Network, CapsLock, Media, UserActivity, Clipboard, Privacy, Progress, DownloadDone, Location, LaunchFailed, Track, Lyrics. Event pertama Power/Network hanya mencatat status awal, tanpa peek.
 - `EyeMood` (Happy > Greeting > Sleeping > LowBattery > Focus > Music > Normal) dihitung oleh `Core::eye_mood()`. Happy/Greeting punya waktu kedaluwarsa, dan waktu tidur dihitung dari `set_last_input()`; ketiganya masuk ke `next_deadline_ms()` (hanya saat Personality aktif), jadi tidak ada timer tambahan.
 - Peek: prioritas 1–5. Peek berprioritas lebih tinggi menggantikan yang sedang tampil. Saat notch terbuka, hanya peek prioritas ≥ 4 yang disimpan di antrean untuk ditampilkan nanti.
-- `Effects { save, redraw, sound }` dikembalikan ke App.
+- `Effects { save, redraw, sound, clipboard, reveal, launch, fetch_lyrics }` dikembalikan ke App.
+- Lirik: `LyricsState` (NoMedia, Loading, Ready, NotFound, Offline, Failed). Hasil untuk lagu lama diabaikan (kunci judul+artis).
 
 ## Pertanyaan terbuka
 - Distribusi: MSIX/Store atau installer biasa + code signing?

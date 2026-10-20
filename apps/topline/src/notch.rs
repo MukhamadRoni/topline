@@ -199,6 +199,11 @@ impl Notch {
         self.set_size(w, h, r, false)
     }
 
+    /// Compositor yang sama dipakai jendela Pengaturan.
+    pub fn compositor(&self) -> &Compositor {
+        &self.compositor
+    }
+
     pub fn current(&self) -> (f32, f32, f32) {
         self.cur
     }

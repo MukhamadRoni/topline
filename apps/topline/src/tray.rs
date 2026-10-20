@@ -7,7 +7,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use topline_core::prayer;
+use topline_core::{prayer, Lang, Language};
 
 use crate::WM_APP_TRAY;
 
@@ -25,6 +25,10 @@ pub const ID_PRAYER_OFF: usize = 12;
 pub const ID_PRAYER_LOCATE: usize = 13;
 pub const ID_SCROLL: usize = 14;
 pub const ID_LAUNCHER: usize = 15;
+pub const ID_SETTINGS: usize = 16;
+pub const ID_LANG_AUTO: usize = 17;
+pub const ID_LANG_ID: usize = 18;
+pub const ID_LANG_EN: usize = 19;
 /// ID_CITY + indeks di `prayer::CITIES`.
 pub const ID_CITY: usize = 100;
 
@@ -47,6 +51,53 @@ pub struct MenuState {
     pub adzan: bool,
     pub clipboard: bool,
     pub scroll: bool,
+    pub lang: Lang,
+    pub language: Language,
+}
+
+/// Submenu jadwal sholat: kota per wilayah, lokasi saat ini, suara adzan.
+unsafe fn prayer_submenu(st: &MenuState) -> Option<HMENU> {
+    let pm = CreatePopupMenu().ok()?;
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(std::iter::once(0)).collect() };
+    let add = |m: HMENU, id: usize, text: &str, checked: bool| {
+        let w = wide(text);
+        let flags = MF_STRING | if checked { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(m, flags, id, PCWSTR(w.as_ptr()));
+    };
+    let sep = |m: HMENU| {
+        let _ = AppendMenuW(m, MF_SEPARATOR, 0, PCWSTR::null());
+    };
+    let l = st.lang;
+    add(pm, ID_PRAYER_OFF, l.t("Nonaktif", "Off"), st.prayer_city.is_empty());
+    add(pm, ID_PRAYER_LOCATE, l.t("Lokasi saat ini (perbarui)", "Current location (update)"), st.prayer_located);
+    sep(pm);
+    for region in prayer::REGIONS {
+        let Ok(rm) = CreatePopupMenu() else { continue };
+        let mut here = false;
+        for (i, c) in prayer::CITIES.iter().enumerate().filter(|(_, c)| c.region == region) {
+            let on = !st.prayer_located && c.name == st.prayer_city;
+            here |= on;
+            add(rm, ID_CITY + i, c.name, on);
+        }
+        let w = wide(region);
+        let flags = MF_POPUP | if here { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(pm, flags, rm.0 as usize, PCWSTR(w.as_ptr()));
+    }
+    sep(pm);
+    add(pm, ID_ADZAN, l.t("Suara adzan (adzan.wav di folder data)", "Adhan sound (adzan.wav in the data folder)"), st.adzan);
+    Some(pm)
+}
+
+/// Menu kota saja (dari jendela Pengaturan), di posisi kursor. 0 = batal.
+pub fn prayer_menu(owner: HWND, st: &MenuState) -> usize {
+    unsafe {
+        let Some(menu) = prayer_submenu(st) else { return 0 };
+        let mut p = POINT::default();
+        let _ = GetCursorPos(&mut p);
+        let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, p.x, p.y, 0, owner, None);
+        let _ = DestroyMenu(menu);
+        cmd.0 as usize
+    }
 }
 
 impl Tray {
@@ -109,40 +160,35 @@ impl Tray {
                 let flags = MF_POPUP | if checked { MF_CHECKED } else { MF_UNCHECKED };
                 let _ = AppendMenuW(parent, flags, sub.0 as usize, PCWSTR(w.as_ptr()));
             };
-            item(ID_OPEN, "Buka Topline\tWin+Alt+T", false);
-            item(ID_ADD_TODO, "Tambah tugas\tWin+Alt+N", false);
-            item(ID_LAUNCHER, "Buka launcher", false);
+            let l = st.lang;
+            item(ID_OPEN, l.t("Buka Topline\tWin+Alt+T", "Open Topline\tWin+Alt+T"), false);
+            item(ID_SETTINGS, l.t("Pengaturan…", "Settings…"), false);
+            item(ID_ADD_TODO, l.t("Tambah tugas\tWin+Alt+N", "Add task\tWin+Alt+N"), false);
+            item(ID_LAUNCHER, l.t("Buka launcher", "Open launcher"), false);
             sep();
-            item(ID_HOVER, "Buka saat kursor mendekat", st.hover);
-            item(ID_PERSONALITY, "Mata saat idle (Personality)", st.personality);
-            item(ID_SCROLL, "Gestur scroll di notch", st.scroll);
-            item(ID_SOLID, "Mode tanpa kaca (lebih hemat GPU)", st.solid);
-            item(ID_AUTOSTART, "Mulai bersama Windows", st.autostart);
-            item(ID_CLIPBOARD, "Riwayat clipboard (hanya di memori)", st.clipboard);
+            item(ID_HOVER, l.t("Buka saat kursor mendekat", "Open on hover"), st.hover);
+            item(ID_PERSONALITY, l.t("Mata saat idle (Personality)", "Eyes when idle (Personality)"), st.personality);
+            item(ID_SCROLL, l.t("Gestur scroll di notch", "Scroll gestures on the notch"), st.scroll);
+            item(ID_SOLID, l.t("Mode tanpa kaca (lebih hemat GPU)", "No-glass mode (lighter on the GPU)"), st.solid);
+            item(ID_AUTOSTART, l.t("Mulai bersama Windows", "Start with Windows"), st.autostart);
+            item(ID_CLIPBOARD, l.t("Riwayat clipboard (hanya di memori)", "Clipboard history (memory only)"), st.clipboard);
+            // Bahasa: label dwibahasa agar tetap bisa ditemukan dalam bahasa apa pun
+            if let Ok(lm) = CreatePopupMenu() {
+                add(lm, ID_LANG_AUTO, l.t("Otomatis (ikut Windows)", "Automatic (follow Windows)"), st.language == Language::Auto);
+                add(lm, ID_LANG_ID, "Bahasa Indonesia", st.language == Language::Id);
+                add(lm, ID_LANG_EN, "English", st.language == Language::En);
+                popup(menu, lm, "Bahasa / Language", false);
+            }
             // Jadwal sholat: kota per wilayah
-            if let Ok(pm) = CreatePopupMenu() {
-                add(pm, ID_PRAYER_OFF, "Nonaktif", st.prayer_city.is_empty());
-                add(pm, ID_PRAYER_LOCATE, "Lokasi saat ini (perbarui)", st.prayer_located);
-                sep_in(pm);
-                for region in prayer::REGIONS {
-                    let Ok(rm) = CreatePopupMenu() else { continue };
-                    let mut here = false;
-                    for (i, c) in prayer::CITIES.iter().enumerate().filter(|(_, c)| c.region == region) {
-                        let on = !st.prayer_located && c.name == st.prayer_city;
-                        here |= on;
-                        add(rm, ID_CITY + i, c.name, on);
-                    }
-                    popup(pm, rm, region, here);
-                }
-                sep_in(pm);
-                add(pm, ID_ADZAN, "Suara adzan (adzan.wav di folder data)", st.adzan);
-                let title = if st.prayer_city.is_empty() { "Jadwal sholat".to_string() } else { format!("Jadwal sholat · {}", st.prayer_place) };
+            if let Some(pm) = prayer_submenu(st) {
+                let base = l.t("Jadwal sholat", "Prayer times");
+                let title = if st.prayer_city.is_empty() { base.to_string() } else { format!("{} · {}", base, st.prayer_place) };
                 popup(menu, pm, &title, false);
             }
             sep();
-            item(ID_DATA, "Buka folder data", false);
+            item(ID_DATA, l.t("Buka folder data", "Open data folder"), false);
             sep();
-            item(ID_EXIT, "Keluar", false);
+            item(ID_EXIT, l.t("Keluar", "Exit"), false);
 
             let mut p = POINT::default();
             let _ = GetCursorPos(&mut p);

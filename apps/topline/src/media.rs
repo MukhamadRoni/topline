@@ -49,6 +49,8 @@ pub enum MediaCmd {
     PlayPause,
     Next,
     Prev,
+    /// Lompat ke posisi (ms), mis. klik baris lirik.
+    Seek(i64),
 }
 
 #[derive(Clone)]
@@ -71,6 +73,7 @@ impl MediaHandle {
                 MediaCmd::PlayPause => s.TryTogglePlayPauseAsync().map(|_| ()),
                 MediaCmd::Next => s.TrySkipNextAsync().map(|_| ()),
                 MediaCmd::Prev => s.TrySkipPreviousAsync().map(|_| ()),
+                MediaCmd::Seek(ms) => s.TryChangePlaybackPositionAsync(ms.max(0) * 10_000).map(|_| ()),
             };
         }
         let _ = self.poke.send(());

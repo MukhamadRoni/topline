@@ -5,20 +5,26 @@
 //! lalu menggambar ulang berdasarkan state publik di [`Core`].
 
 pub mod gesture;
+pub mod i18n;
 pub mod model;
 pub mod parse;
 pub mod prayer;
+pub mod settings;
 
 pub use gesture::{GestureAction, ScrollGestures, ScrollStep, ScrollZone};
+pub use i18n::{Lang, Language};
 pub use model::*;
 pub use parse::parse_task;
 pub use prayer::PrayerTimes;
+pub use settings::{Number, Toggle};
+pub use topline_lyrics::{Line as LyricLine, Lyrics};
 
 use std::collections::VecDeque;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Widget {
     Music,
+    Lyrics,
     Focus,
     Water,
     Todo,
@@ -28,8 +34,9 @@ pub enum Widget {
 }
 
 impl Widget {
-    pub const ALL: [Widget; 7] = [
+    pub const ALL: [Widget; 8] = [
         Widget::Music,
+        Widget::Lyrics,
         Widget::Focus,
         Widget::Water,
         Widget::Todo,
@@ -37,6 +44,63 @@ impl Widget {
         Widget::Prayer,
         Widget::Clipboard,
     ];
+
+    /// Kunci stabil untuk `Settings::hidden_tabs`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Widget::Music => "music",
+            Widget::Lyrics => "lyrics",
+            Widget::Focus => "focus",
+            Widget::Water => "water",
+            Widget::Todo => "todo",
+            Widget::Launcher => "launcher",
+            Widget::Prayer => "prayer",
+            Widget::Clipboard => "clipboard",
+        }
+    }
+
+    pub fn label(self, lang: Lang) -> &'static str {
+        match self {
+            Widget::Music => lang.t("Musik", "Music"),
+            Widget::Lyrics => lang.t("Lirik", "Lyrics"),
+            Widget::Focus => lang.t("Fokus", "Focus"),
+            Widget::Water => lang.t("Air minum", "Water"),
+            Widget::Todo => "To-do",
+            Widget::Launcher => "Launcher",
+            Widget::Prayer => lang.t("Sholat", "Prayer"),
+            Widget::Clipboard => "Clipboard",
+        }
+    }
+}
+
+/// Asal lirik yang ditampilkan.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LyricsSource {
+    /// File .lrc di folder lirik pengguna.
+    Local,
+    /// LRCLIB (langsung atau dari cache).
+    Online,
+}
+
+/// Hasil pencarian lirik dari lapisan aplikasi.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LyricsResult {
+    Found(Lyrics, LyricsSource),
+    NotFound,
+    /// Tidak ada di lokal dan lirik online dimatikan.
+    Offline,
+    /// Gagal menghubungi LRCLIB.
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LyricsState {
+    NoMedia,
+    Loading,
+    Ready { lyrics: Lyrics, source: LyricsSource },
+    NotFound,
+    Offline,
+    Failed,
 }
 
 /// Status proses yang dilaporkan lewat `topline progress ...`.
@@ -254,6 +318,12 @@ pub enum Command {
     SetAdzanSound(bool),
     SetClipboardHistory(bool),
     SetScrollGestures(bool),
+    /// Opsi on/off dari jendela Pengaturan.
+    SetToggle(Toggle, bool),
+    /// Opsi angka dari jendela Pengaturan: geser sebanyak `i32` langkah.
+    StepNumber(Number, i32),
+    SetTabVisible(Widget, bool),
+    SetLanguage(Language),
     /// Drag dari Explorer/Start masuk ke notch: buka launcher dengan zona jatuh.
     DragEnter,
     /// Drag keluar tanpa drop: tutup lagi jika notch dibuka oleh drag.
@@ -296,6 +366,10 @@ pub enum SystemEvent {
     Location(Option<GeoPoint>),
     /// ShellExecuteEx gagal membuka sematan.
     LaunchFailed { name: String },
+    /// Lagu berganti (kunci judul+artis), None = tidak ada sesi media.
+    Track { key: Option<String> },
+    /// Hasil pencarian lirik untuk lagu `key`.
+    Lyrics { key: String, result: LyricsResult },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -316,6 +390,8 @@ pub struct Effects {
     pub reveal: Option<String>,
     /// Sematan yang harus dibuka (ShellExecuteEx di lapisan aplikasi).
     pub launch: Option<Pin>,
+    /// Cari lirik untuk lagu yang sedang diputar.
+    pub fetch_lyrics: bool,
 }
 
 impl Effects {
@@ -334,6 +410,7 @@ impl Effects {
         if o.launch.is_some() {
             self.launch = o.launch;
         }
+        self.fetch_lyrics |= o.fetch_lyrics;
     }
 }
 
@@ -362,6 +439,11 @@ pub struct Core {
     pub pin_confirm: Option<u64>,
     /// Pesan singkat di launcher (mis. batas sematan) dan batas waktunya.
     pub pin_notice: Option<(String, i64)>,
+    pub lyrics: LyricsState,
+    /// Bahasa UI yang dipakai (`Settings::language` yang sudah diselesaikan lapisan aplikasi).
+    pub lang: Lang,
+    /// Lagu yang liriknya sedang dicari/ditampilkan.
+    lyrics_key: Option<String>,
     /// Input pengguna terakhir (Clock::ms), dari GetLastInputInfo.
     last_input_ms: Option<i64>,
     pub eye_sleeping: bool,
@@ -416,6 +498,9 @@ impl Core {
             drag_opened: false,
             pin_confirm: None,
             pin_notice: None,
+            lyrics: LyricsState::NoMedia,
+            lang: Lang::Id,
+            lyrics_key: None,
             last_input_ms: None,
             eye_sleeping: false,
             eye_happy_until: None,
@@ -502,7 +587,71 @@ impl Core {
                 Widget::Clipboard => s.clipboard_history,
                 _ => true,
             })
+            .filter(|w| *w == Widget::Music || !s.hidden_tabs.iter().any(|k| k == w.key()))
             .collect()
+    }
+
+    // ---------------------------------------------------------------- lirik
+
+    /// Baris caption di bawah pill idle (posisi lagu `pos_ms`), jika caption aktif.
+    pub fn caption(&self, pos_ms: i64) -> Option<String> {
+        if !self.data.settings.lyrics_caption || !self.media_playing || self.view != View::Idle {
+            return None;
+        }
+        match &self.lyrics {
+            LyricsState::Ready { lyrics, .. } => lyrics.caption(pos_ms),
+            _ => None,
+        }
+    }
+
+    /// Lirik tersinkron yang sedang tampil (tab Lirik atau caption) dan butuh redraw per baris.
+    pub fn lyrics_visible(&self) -> bool {
+        let synced = matches!(&self.lyrics, LyricsState::Ready { lyrics, .. } if lyrics.synced);
+        synced
+            && self.media_playing
+            && match self.view {
+                View::Expanded(Widget::Lyrics) => true,
+                View::Idle => self.data.settings.lyrics_caption,
+                _ => false,
+            }
+    }
+
+    /// Lagu saat ini perlu dicari ulang (mis. lirik online baru dinyalakan).
+    fn retry_lyrics(&mut self, fx: &mut Effects) {
+        if self.lyrics_key.is_some() && matches!(self.lyrics, LyricsState::Offline | LyricsState::Failed | LyricsState::NotFound) {
+            self.lyrics = LyricsState::Loading;
+            fx.fetch_lyrics = true;
+        }
+    }
+
+    // ---------------------------------------------------------------- pengaturan
+
+    fn set_toggle(&mut self, t: Toggle, on: bool, fx: &mut Effects) {
+        t.set(&mut self.data.settings, on);
+        fx.save = true;
+        match t {
+            Toggle::ClipboardHistory if !on => {
+                self.clips.clear();
+                self.clip_copied = None;
+                if self.widget() == Some(Widget::Clipboard) {
+                    self.open(Widget::Music);
+                }
+            }
+            Toggle::LyricsOnline if on => self.retry_lyrics(fx),
+            _ => {}
+        }
+    }
+
+    fn step_number(&mut self, n: Number, steps: i32) -> bool {
+        let old_focus = self.phase_len(self.focus.phase);
+        if !n.step(&mut self.data.settings, steps) {
+            return false;
+        }
+        // Timer yang belum dimulai mengikuti durasi baru.
+        if matches!(n, Number::FocusMin | Number::BreakMin) && !self.focus.running && self.focus.remaining_ms == old_focus {
+            self.focus.remaining_ms = self.phase_len(self.focus.phase);
+        }
+        true
     }
 
     // ---------------------------------------------------------------- sholat
@@ -536,7 +685,7 @@ impl Core {
     pub fn prayer_place(&self) -> String {
         let s = &self.data.settings;
         match s.prayer_location {
-            Some(_) => format!("sekitar {}", s.prayer_city),
+            Some(_) => format!("{} {}", self.lang.t("sekitar", "near"), s.prayer_city),
             None => s.prayer_city.clone(),
         }
     }
@@ -738,13 +887,26 @@ impl Core {
                 // tetap dalam mode menambah untuk input berturut-turut
             }
             Command::CancelAddTodo => self.adding_todo = false,
-            Command::SetPersonality(on) => {
-                self.data.settings.personality = on;
+            Command::SetPersonality(on) => self.set_toggle(Toggle::Personality, on, &mut fx),
+            Command::SetOpenOnHover(on) => self.set_toggle(Toggle::OpenOnHover, on, &mut fx),
+            Command::SetToggle(t, on) => self.set_toggle(t, on, &mut fx),
+            Command::StepNumber(n, steps) => fx.save = self.step_number(n, steps),
+            Command::SetLanguage(l) => {
+                self.data.settings.language = l;
                 fx.save = true;
             }
-            Command::SetOpenOnHover(on) => {
-                self.data.settings.open_on_hover = on;
-                fx.save = true;
+            Command::SetTabVisible(w, visible) => {
+                if w != Widget::Music {
+                    let hidden = &mut self.data.settings.hidden_tabs;
+                    hidden.retain(|k| k != w.key());
+                    if !visible {
+                        hidden.push(w.key().to_string());
+                        if self.widget() == Some(w) {
+                            self.open(Widget::Music);
+                        }
+                    }
+                    fx.save = true;
+                }
             }
             Command::DismissPeek => {
                 self.peek = None;
@@ -771,21 +933,8 @@ impl Core {
                 }
                 fx.save = true;
             }
-            Command::SetAdzanSound(on) => {
-                self.data.settings.adzan_sound = on;
-                fx.save = true;
-            }
-            Command::SetClipboardHistory(on) => {
-                self.data.settings.clipboard_history = on;
-                if !on {
-                    self.clips.clear();
-                    self.clip_copied = None;
-                    if self.widget() == Some(Widget::Clipboard) {
-                        self.open(Widget::Music);
-                    }
-                }
-                fx.save = true;
-            }
+            Command::SetAdzanSound(on) => self.set_toggle(Toggle::AdzanSound, on, &mut fx),
+            Command::SetClipboardHistory(on) => self.set_toggle(Toggle::ClipboardHistory, on, &mut fx),
             Command::CopyClip(id) => {
                 if let Some(text) = self.clips.iter().find(|c| c.id == id).map(|c| c.text.clone()) {
                     fx.clipboard = Some(text.clone());
@@ -798,10 +947,7 @@ impl Core {
                     c.pinned = !c.pinned;
                 }
             }
-            Command::SetScrollGestures(on) => {
-                self.data.settings.scroll_gestures = on;
-                fx.save = true;
-            }
+            Command::SetScrollGestures(on) => self.set_toggle(Toggle::ScrollGestures, on, &mut fx),
             Command::DragEnter => {
                 self.dragging = true;
                 if !self.is_open() {
@@ -836,7 +982,8 @@ impl Core {
                     fx.save = true;
                 }
                 if full {
-                    self.pin_notice = Some(("Maksimal 8. Lepas satu sematan dulu.".into(), now.ms + PIN_NOTICE_MS));
+                    let msg = self.lang.t("Maksimal 8. Lepas satu sematan dulu.", "Up to 8. Unpin one first.");
+                    self.pin_notice = Some((msg.into(), now.ms + PIN_NOTICE_MS));
                 }
                 self.open(Widget::Launcher);
             }
@@ -1017,6 +1164,26 @@ impl Core {
             },
             SystemEvent::DownloadDone { name } => self.push_peek(PeekKind::DownloadDone { name }, now),
             SystemEvent::LaunchFailed { name } => self.push_peek(PeekKind::LaunchFailed { name }, now),
+            SystemEvent::Track { key } => {
+                if key == self.lyrics_key {
+                    return Effects::default();
+                }
+                let fetch = key.is_some();
+                self.lyrics = if fetch { LyricsState::Loading } else { LyricsState::NoMedia };
+                self.lyrics_key = key;
+                return Effects { redraw: true, fetch_lyrics: fetch, ..Default::default() };
+            }
+            SystemEvent::Lyrics { key, result } => {
+                if self.lyrics_key.as_ref() != Some(&key) {
+                    return Effects::default(); // hasil untuk lagu sebelumnya
+                }
+                self.lyrics = match result {
+                    LyricsResult::Found(lyrics, source) => LyricsState::Ready { lyrics, source },
+                    LyricsResult::NotFound => LyricsState::NotFound,
+                    LyricsResult::Offline => LyricsState::Offline,
+                    LyricsResult::Failed => LyricsState::Failed,
+                };
+            }
             SystemEvent::Location(point) => {
                 let Some(g) = point else {
                     self.push_peek(PeekKind::Location { place: None }, now);
@@ -1163,7 +1330,7 @@ impl Core {
                 .into_iter()
                 .filter(|&i| p.min[i] > self.prayer_done_min && p.min[i] <= now.minute_of_day())
                 .last()
-                .map(|i| (p.min[i], PeekKind::Prayer { name: prayer::NAMES[i].to_string(), time: p.label(i) }))
+                .map(|i| (p.min[i], PeekKind::Prayer { name: prayer::name(i, self.lang).to_string(), time: p.label(i) }))
         });
         if let Some((min, kind)) = due {
             self.prayer_done_min = min;
@@ -1763,7 +1930,8 @@ mod tests {
 
     #[test]
     fn short_date() {
-        assert_eq!(clock(9, 0, 0).short_date_id(), "Sel · 20 Okt");
+        assert_eq!(clock(9, 0, 0).short_date(Lang::Id), "Sel · 20 Okt");
+        assert_eq!(clock(9, 0, 0).short_date(Lang::En), "Tue · Oct 20");
     }
     #[test]
     fn scroll_volume_and_setting() {
@@ -1811,10 +1979,10 @@ mod tests {
         assert_eq!(c.scroll(ScrollZone::Tabs, 120, false, false, &t), None, "sudah tab pertama");
         t.ms += 1000;
         assert_eq!(c.scroll(ScrollZone::Tabs, -120, false, false, &t), Some(GestureAction::Tab));
-        assert_eq!(c.view, View::Expanded(Widget::Focus));
+        assert_eq!(c.view, View::Expanded(Widget::Lyrics));
         t.ms += 100;
         assert_eq!(c.scroll(ScrollZone::Tabs, -120, false, false, &t), None, "cooldown");
-        assert_eq!(c.view, View::Expanded(Widget::Focus));
+        assert_eq!(c.view, View::Expanded(Widget::Lyrics));
     }
     fn pin(t: &str) -> PinInput {
         PinInput { kind: PinKind::File, target: t.into(), name: String::new() }
@@ -1894,5 +2062,96 @@ mod tests {
         assert!(!c.dragging);
         assert_eq!(c.view, View::Expanded(Widget::Launcher));
         assert!(c.tabs().contains(&Widget::Launcher));
+    }
+    #[test]
+    fn lyrics_follow_track_and_ignore_stale_results() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        let fx = c.system(SystemEvent::Track { key: Some("a".into()) }, &t0);
+        assert!(fx.fetch_lyrics);
+        assert_eq!(c.lyrics, LyricsState::Loading);
+        assert!(!c.system(SystemEvent::Track { key: Some("a".into()) }, &t0).fetch_lyrics, "lagu sama: tidak dicari ulang");
+        c.system(SystemEvent::Track { key: Some("b".into()) }, &t0);
+        let found = LyricsResult::Found(Lyrics::parse_lrc("[00:01.00]Halo"), LyricsSource::Online);
+        c.system(SystemEvent::Lyrics { key: "a".into(), result: found.clone() }, &t0);
+        assert_eq!(c.lyrics, LyricsState::Loading, "hasil lagu lama diabaikan");
+        c.system(SystemEvent::Lyrics { key: "b".into(), result: found }, &t0);
+        assert!(matches!(c.lyrics, LyricsState::Ready { .. }));
+        c.system(SystemEvent::Track { key: None }, &t0);
+        assert_eq!(c.lyrics, LyricsState::NoMedia);
+    }
+
+    #[test]
+    fn caption_only_when_idle_playing_and_enabled() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        c.system(SystemEvent::Track { key: Some("a".into()) }, &t0);
+        c.system(SystemEvent::Lyrics { key: "a".into(), result: LyricsResult::Found(Lyrics::parse_lrc("[00:01.00]Halo\n[00:03.00]Dunia"), LyricsSource::Online) }, &t0);
+        assert_eq!(c.caption(2000), None, "musik tidak diputar");
+        c.system(SystemEvent::Media { playing: true, title: Some("a".into()) }, &t0);
+        assert_eq!(c.caption(2000).as_deref(), Some("Halo"));
+        assert_eq!(c.caption(500).as_deref(), Some("♪"));
+        assert!(c.lyrics_visible());
+        c.apply(Command::Open(Widget::Water), &t0);
+        assert_eq!(c.caption(2000), None, "notch terbuka");
+        assert!(!c.lyrics_visible());
+        c.apply(Command::Switch(Widget::Lyrics), &t0);
+        assert!(c.lyrics_visible(), "tab Lirik terbuka");
+        c.apply(Command::Close, &t0);
+        c.apply(Command::SetToggle(Toggle::LyricsCaption, false), &t0);
+        assert_eq!(c.caption(2000), None);
+        assert!(!c.lyrics_visible());
+    }
+
+    #[test]
+    fn enabling_online_lyrics_retries() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        c.system(SystemEvent::Track { key: Some("a".into()) }, &t0);
+        c.system(SystemEvent::Lyrics { key: "a".into(), result: LyricsResult::Offline }, &t0);
+        assert_eq!(c.lyrics, LyricsState::Offline);
+        let fx = c.apply(Command::SetToggle(Toggle::LyricsOnline, false), &t0);
+        assert!(!fx.fetch_lyrics);
+        let fx = c.apply(Command::SetToggle(Toggle::LyricsOnline, true), &t0);
+        assert!(fx.fetch_lyrics && fx.save);
+        assert_eq!(c.lyrics, LyricsState::Loading);
+    }
+
+    #[test]
+    fn settings_numbers_and_tabs() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        let fx = c.apply(Command::StepNumber(Number::FocusMin, 1), &t0);
+        assert!(fx.save);
+        assert_eq!(c.focus.label(t0.ms), "30:00", "timer yang belum jalan ikut durasi baru");
+        c.apply(Command::FocusStartPause, &t0);
+        c.apply(Command::StepNumber(Number::FocusMin, -1), &t0);
+        assert_eq!(c.focus.label(t0.ms), "30:00", "timer berjalan tidak diubah");
+        assert!(!c.apply(Command::StepNumber(Number::SessionsTarget, 0), &t0).save);
+
+        c.apply(Command::Open(Widget::Water), &t0);
+        c.apply(Command::SetTabVisible(Widget::Water, false), &t0);
+        assert_eq!(c.view, View::Expanded(Widget::Music), "tab tersembunyi ditutup");
+        assert!(!c.tabs().contains(&Widget::Water));
+        assert_eq!(c.data.settings.hidden_tabs, vec!["water".to_string()]);
+        c.apply(Command::SetTabVisible(Widget::Music, false), &t0);
+        assert!(c.tabs().contains(&Widget::Music), "Musik selalu tampil");
+        c.apply(Command::SetTabVisible(Widget::Water, true), &t0);
+        assert!(c.tabs().contains(&Widget::Water));
+        assert!(c.data.settings.hidden_tabs.is_empty());
+    }
+    #[test]
+    fn english_strings_from_core() {
+        let t0 = clock(9, 0, 0);
+        let mut c = quiet_core(&t0);
+        c.lang = Lang::En;
+        let many: Vec<PinInput> = (0..9).map(|i| PinInput { kind: PinKind::File, target: format!("f{i}"), name: String::new() }).collect();
+        c.apply(Command::AddPins(many), &t0);
+        assert_eq!(c.pin_notice.as_ref().unwrap().0, "Up to 8. Unpin one first.");
+        assert_eq!(prayer::name(1, Lang::En), "Fajr");
+        assert_eq!(Widget::Water.label(Lang::En), "Water");
+        let fx = c.apply(Command::SetLanguage(Language::En), &t0);
+        assert!(fx.save);
+        assert_eq!(c.data.settings.language, Language::En);
     }
 }

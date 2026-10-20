@@ -101,7 +101,9 @@ dependencies = [
 name = "topline"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "topline-core",
+ "topline-lyrics",
  "topline-store",
  "windows",
  "windows-core",
@@ -112,7 +114,12 @@ name = "topline-core"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "topline-lyrics",
 ]
+
+[[package]]
+name = "topline-lyrics"
+version = "0.1.0"
 
 [[package]]
 name = "topline-setup"

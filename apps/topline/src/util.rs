@@ -40,6 +40,12 @@ pub fn last_input_ms(now: &Clock) -> i64 {
     }
 }
 
+/// Bahasa tampilan Windows adalah Indonesia (untuk `Language::Auto`).
+pub fn windows_is_indonesian() -> bool {
+    // LANG_INDONESIAN = 0x21 (primary language id)
+    unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() & 0x3ff == 0x21 }
+}
+
 /// Pengaturan Windows "Animation effects" (SPI_GETCLIENTAREAANIMATION).
 pub fn animations_enabled() -> bool {
     let mut on = TRUE;

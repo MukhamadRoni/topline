@@ -92,5 +92,7 @@ mod tests {
         assert!(p.settings.personality);
         assert_eq!(p.settings.water_goal_ml, 2000);
         assert_eq!(p.settings.eye_sleep_minutes, 5, "data lama tanpa field baru tetap terbaca");
+        assert_eq!(p.settings.language, topline_core::Language::Id, "data lama tetap berbahasa Indonesia");
+        assert_eq!(Persisted::default().settings.language, topline_core::Language::Auto, "instalasi baru ikut Windows");
     }
 }

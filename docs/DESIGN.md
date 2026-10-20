@@ -28,10 +28,12 @@ Sumber: prototipe kanvas "Topline — Windows Notch Prototype" (artifact Claude 
 |---|---|
 | Jendela visual (tetap) | 640 × 540 |
 | Idle | 124 × 36 (hanya jam/mata), 208 × 36 (dengan musik/fokus), radius bawah 18 |
+| Idle + caption lirik | 420 × 60: isi pill tetap di tengah atas, baris lirik 13/500 ice 92% di bawahnya ("♪" saat jeda) |
 | Peek | 340 × 44, radius 22 |
 | Expanded | lebar 592, radius 28 |
 | Tata letak expanded | padding samping 20, atas 12; header 40; jarak 16; tab 48; bawah 14 |
-| Tinggi isi widget | Musik 164 · Fokus 120 · Air 168 · To-do 28 + 4 + baris × 44 + 6 + 44 (maks. 6 baris) · Sholat 168 · Clipboard 28 + 4 + baris × 44 (maks. 6) · Launcher kosong 120, 1 baris 104, 2 baris 220 |
+| Tinggi isi widget | Musik 164 · Fokus 120 · Air 168 · To-do 28 + 4 + baris × 44 + 6 + 44 (maks. 6 baris) · Sholat 168 · Clipboard 28 + 4 + baris × 44 (maks. 6) · Launcher kosong 120, 1 baris 104, 2 baris 220 · Lirik 188 |
+| Jendela Pengaturan | 760 × 560, menu samping 212 (item 40, pill 20), isi x 236, baris 60 dalam kartu `.05`/`.10` radius 16, sakelar 44 × 24 (sky saat aktif), stepper bulat 32, tombol kaca 32, chip tab 34, segmen bahasa (aktif: pill putih teks navy). Tint kaca rgba(9,13,34,.77); mode tanpa kaca navy pekat |
 | Tile launcher | (552 − 3 × 12) / 4 = 129 × 104, jarak 12, radius 20, ikon 48 di tengah atas (y + 14), nama 12 px satu baris dengan elipsis |
 | Tombol | tinggi 44 (pill), ikon bulat 40–52 |
 | Tab | pill wadah 48, item 52 × 40, indikator aktif `.14` |
@@ -53,7 +55,9 @@ Animasi: cubic-bezier(0.22, 1, 0.36, 1), 420 ms untuk ukuran, fade isi 260 ms (j
   | Normal | bawaan | kedip alami: satu timeline 7,3 s (kedip di 0,42, kedip ganda di 0,86/0,88), 1 → 0,1 → 1 dalam 140 ms |
 
   Saat kursor di atas notch, mata melirik ke arah kursor (maks ±2 DIP horizontal, ±1 DIP vertikal), dan kembali ke tengah saat kursor pergi (kecuali saat tidur). Jika "Animation effects" Windows dimatikan, bentuk ekspresi tetap ditampilkan, tapi tanpa kedip, ayunan, pantulan, lirikan, atau "z".
-- **Header expanded:** label tanggal mono di kiri ("SEL · 20 OKT"), jam di tengah, tombol tutup bulat chevron di kanan.
+- **Header expanded:** label tanggal mono di kiri ("SEL · 20 OKT" / "TUE · OCT 20"), jam di tengah, ikon roda gigi (Pengaturan, tanpa lingkaran sampai di-hover) dan tombol tutup bulat chevron di kanan.
+- **Lirik:** label "Judul · Artis" 12/500 text-2 dan sumber mono ("LRCLIB" / "FILE LOKAL"); lima baris 32 px: aktif 20/500 putih di tengah, lainnya 15 text-3; hover isi `.06`. Pesan keadaan (mencari, tidak ditemukan, online mati, gagal) 18/500 + keterangan 13 text-2. Ikon tab: tiga garis rrect.
+- **Bahasa:** semua teks punya versi Indonesia dan Inggris dengan panjang mirip; label mono tetap kapital.
 - **Musik:** cover 96 px radius 20, pill status (mint saat diputar), judul, artis, progress dengan waktu mono, tombol prev / play (putih 52 px) / next.
 - **Fokus:** ring 112 px (sky saat fokus, mint saat istirahat), label "SESI n / 4", waktu 56 px, segmen "Fokus 25 | Istirahat 5", tombol utama Mulai/Jeda/Lanjut, sekunder Ulang/Lewati.
 - **Air minum:** label, angka besar "1,25 / 2,0 L", bar gradient electric→sky, keterangan pengingat berikutnya, tombol "+250 ml" (utama), "+500 ml", undo; kartu grafik 8 jam terakhir.

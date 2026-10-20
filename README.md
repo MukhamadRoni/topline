@@ -6,14 +6,16 @@
 
 <p align="center">
   <b>Notch "hidup" untuk Windows 11.</b><br>
-  Musik, fokus, to-do, jadwal sholat, dan kabar sistem di tengah atas layar.<br>
-  Rust native · full offline · <b>0% CPU</b> saat idle.
+  Musik, lirik, fokus, to-do, jadwal sholat, dan kabar sistem di tengah atas layar.<br>
+  Rust native · Indonesia & English · <b>0% CPU</b> saat idle.<br>
+  <i>A living notch for Windows 11, in Indonesian and English.</i>
 </p>
 
 <p align="center">
   <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-native-B7410E?logo=rust&logoColor=white">
-  <img alt="Offline" src="https://img.shields.io/badge/100%25-offline-2EA44F">
+  <img alt="Offline-first" src="https://img.shields.io/badge/offline-first-2EA44F">
+  <img alt="Bahasa" src="https://img.shields.io/badge/bahasa-ID%20%7C%20EN-0A4BF0">
   <img alt="CPU idle" src="https://img.shields.io/badge/CPU%20idle-0%25-6E40C9">
   <img alt="Ukuran" src="https://img.shields.io/badge/ukuran-%3C1%20MB-555">
   <img alt="Lisensi MIT" src="https://img.shields.io/badge/lisensi-MIT-yellow">
@@ -56,6 +58,9 @@ tanpa mengganggu.
 | 💧 | **Air minum** | Target harian dan pengingat |
 | ✅ | **To-do** | `Rapat tim 16:30` → jam dikenali otomatis. Tambah dari mana saja dengan **Win + Alt + N** |
 | 🕌 | **Jadwal sholat** | Dihitung offline dengan metode Kemenag (44 kota) atau **lokasi saat ini**, plus adzan |
+| 🎤 | **Lirik tersinkron** | Tab Lirik (baris aktif disorot, klik baris untuk lompat) dan caption satu baris di bawah notch. Dari file `.lrc` Anda sendiri atau LRCLIB, di-cache |
+| ⚙️ | **Pengaturan** | Jendela kaca dengan semua opsi: umum, tampilan, tab, Pomodoro, air minum, sholat, lirik |
+| 🌐 | **Dua bahasa** | Indonesia dan English; otomatis mengikuti bahasa Windows atau pilih sendiri |
 | 🚀 | **Launcher** | Seret aplikasi (termasuk dari Start), file, atau folder ke notch untuk menyematkannya (maks. 8). Hanya referensi; file asli tidak disentuh |
 | 📋 | **Riwayat clipboard** | 20 teks terakhir, bisa di-pin. Hanya di memori; isi pengelola sandi diabaikan |
 | 🟢 | **Indikator privasi** | Titik hijau saat kamera aktif, oranye saat mikrofon aktif |
@@ -96,11 +101,15 @@ dimatikan, mata ikut diam.
 | Hapus tugas / tutup peek | Klik kanan |
 | Sematkan ke launcher | Seret aplikasi/file/folder dari Explorer, Desktop, atau Start ke notch, lalu lepaskan |
 | Atur launcher | Klik tile untuk membuka; seret tile untuk mengubah urutan; klik kanan untuk lokasi file, jalankan sebagai admin, atau lepas sematan |
-| Pengaturan | Klik kanan ikon Topline di system tray (gestur scroll bisa dimatikan di sana) |
+| Lirik | Tab **Lirik**; klik baris untuk lompat ke bagian lagu itu |
+| Pengaturan | Ikon roda gigi di notch, tray → **Pengaturan…**, atau `topline settings [lirik]` |
+| Bahasa | Pengaturan → Umum → Bahasa, atau tray → **Bahasa / Language** |
 
 **Jadwal sholat.** Tray → *Jadwal sholat*, lalu pilih kota atau **Lokasi saat ini**.
 Lokasi dibaca sekali dari layanan lokasi Windows lalu disimpan, tanpa pelacakan terus-menerus.
 Untuk adzan sendiri, taruh `adzan.wav` di `%LOCALAPPDATA%\Topline`.
+
+**Lirik sendiri.** Taruh `Artis - Judul.lrc` di `%LOCALAPPDATA%\Topline\lyrics`. File ini dipakai lebih dulu daripada LRCLIB.
 
 **Progress dari skrip atau build:**
 
@@ -112,7 +121,8 @@ topline progress done  "Build aplikasi"   # atau: fail
 
 ## 🔒 Privasi
 
-- **Tidak ada jaringan.** Topline tidak pernah mengirim data ke internet.
+- **Satu-satunya akses internet: lirik.** Saat lagu berganti, Topline mencari lirik di [lrclib.net](https://lrclib.net) dengan mengirim **judul, artis, dan durasi** lagu saja. Hasilnya di-cache, jadi setiap lagu hanya dicari sekali. Bisa dimatikan di Pengaturan → Lirik.
+- Selain itu tidak ada jaringan: tanpa akun, telemetri, atau update otomatis.
 - Data (tugas, air minum, pengaturan) disimpan di `%LOCALAPPDATA%\Topline\data.json`.
 - Riwayat clipboard hanya ada di memori, hilang saat Topline ditutup.
 - Lokasi hanya diminta saat Anda memilih *Lokasi saat ini*.
@@ -160,7 +170,8 @@ cargo test -p topline-core -p topline-store
 ## 🧭 Struktur
 
 ```
-crates/topline-core    semua logika produk (state, Pomodoro, to-do, peek, mata, jadwal sholat) + unit test
+crates/topline-core    semua logika produk (state, Pomodoro, to-do, peek, mata, jadwal sholat, pengaturan, i18n) + unit test
+crates/topline-lyrics  parser .lrc, baris aktif, pembersihan judul, pemilihan hasil LRCLIB + unit test
 crates/topline-store   penyimpanan JSON dengan tulis atomik
 apps/topline           aplikasi Windows: Win32 + Windows.UI.Composition + Direct2D/DirectWrite
 apps/topline-setup     installer per-user
@@ -173,11 +184,12 @@ menyambungkan event. Detailnya ada di [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 
 ## 🗺️ Roadmap
 
-- [ ] Lirik tersinkron (offline)
+- [x] Lirik tersinkron (file .lrc / LRCLIB)
+- [x] Jendela Pengaturan lengkap
+- [x] Dua bahasa: Indonesia & English
 - [x] Launcher mini dengan drag & drop
 - [x] Gestur scroll di notch
 - [ ] Shelf file (drag & drop sementara, seret keluar)
-- [ ] Jendela Pengaturan lengkap
 - [ ] Rapat dari Google Calendar
 - [ ] Notifikasi WhatsApp / Telegram
 - [ ] Chat AI assistant (pakai API key sendiri)

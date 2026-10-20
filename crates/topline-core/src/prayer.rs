@@ -82,6 +82,15 @@ pub fn nearest(lat: f64, lon: f64) -> &'static City {
 
 /// Urutan waktu dalam [`PrayerTimes::min`].
 pub const NAMES: [&str; 7] = ["Imsak", "Subuh", "Terbit", "Dzuhur", "Ashar", "Maghrib", "Isya"];
+const NAMES_EN: [&str; 7] = ["Imsak", "Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"];
+
+/// Nama waktu sholat ke-`i` dalam bahasa UI.
+pub fn name(i: usize, lang: crate::Lang) -> &'static str {
+    match lang {
+        crate::Lang::Id => NAMES[i],
+        crate::Lang::En => NAMES_EN[i],
+    }
+}
 /// Indeks waktu yang memunculkan pengingat (bukan Imsak/Terbit).
 pub const NOTIFY: [usize; 5] = [1, 3, 4, 5, 6];
 

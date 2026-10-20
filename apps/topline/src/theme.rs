@@ -98,6 +98,16 @@ pub const G_CANCEL: char = '\u{E711}';
 pub const G_LOCATION: char = '\u{E707}';
 pub const G_FOLDER: char = '\u{E8B7}';
 pub const G_DOCUMENT: char = '\u{E8A5}';
+pub const G_SETTINGS: char = '\u{E713}';
+pub const G_MINUS: char = '\u{E738}';
+pub const G_COLOR: char = '\u{E790}';
+pub const G_INFO: char = '\u{E946}';
+
+// ---- lirik (DIP)
+/// Notch idle dengan caption lirik di bawah pill.
+pub const CAPTION_W: f32 = 420.0;
+pub const CAPTION_H: f32 = 60.0;
+pub const LYRICS_BODY_H: f32 = 188.0;
 
 // ---- launcher (DIP)
 pub const PIN_COLS: usize = 4;
