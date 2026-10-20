@@ -1,0 +1,44 @@
+# ---- Build Rust ----
+/target/
+**/*.rs.bk
+*.pdb
+
+# ---- Hasil build / rilis ----
+/dist/
+*.res
+*.res.o
+
+# ---- Toolchain lokal (dipasang build.ps1) ----
+/.toolchain/
+
+# ---- Font Geist (diunduh build.ps1 saat build) ----
+/assets/fonts/
+
+# ---- Build runner jarak jauh (log & antrean lokal) ----
+/.tools/out/
+/.tools/req/
+/.tools/heartbeat.txt
+
+# ---- Indeks & pengaturan lokal tool/agent ----
+/.codegraph/
+/.claude/settings.local.json
+
+# ---- Data & log aplikasi yang tersalin ke repo ----
+data.json
+data.json.bak
+debug
+debug.log
+*.log
+
+# ---- Editor / IDE ----
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---- Sistem operasi ----
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

@@ -1,0 +1,11 @@
+[package]
+name = "topline-store"
+description = "Penyimpanan lokal Topline (JSON, tulis atomik)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+topline-core.workspace = true

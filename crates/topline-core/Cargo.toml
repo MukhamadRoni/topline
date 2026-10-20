@@ -1,0 +1,13 @@
+[package]
+name = "topline-core"
+description = "Logika inti Topline: state notch, Pomodoro, air minum, to-do, peek. Tanpa dependensi Windows."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
