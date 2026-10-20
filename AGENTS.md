@@ -81,8 +81,9 @@ apps/topline/src/
   util.rs                  Clock lokal, folder data, autostart registry, ikon dari .ico, log debug,
                            GetLastInputInfo, SPI_GETCLIENTAREAANIMATION, flag demo mata
 apps/topline-setup/        installer per-user (menyematkan topline.exe via env TOPLINE_EXE)
-assets/topline.ico         ikon exe/tray/installer (multi-ukuran 16–256, dibuat dari assets/logo/logo.jpg dengan PIL)
-assets/logo/               logo.jpg (sumber ikon), banner.jpg (README)
+assets/topline.ico         ikon exe/tray/installer (multi-ukuran 16–256; sama dengan assets/branding/topline.ico)
+assets/logo/               logo.png (1024 px, sumber ikon), banner.png (README, 1280×640)
+assets/branding/           paket merek: ikon PNG 16–1024, banner 1280×640 dan 1500×500 (gelap/terang), topline.ico
 docs/                      ARCHITECTURE.md, DESIGN.md, ROADMAP.md
 ```
 

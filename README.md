@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo/banner.jpg" alt="Topline" width="640">
+  <img src="assets/logo/banner.png" alt="Topline" width="640">
 </p>
 
 <h1 align="center">Topline</h1>
