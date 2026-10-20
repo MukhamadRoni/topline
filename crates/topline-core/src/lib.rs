@@ -22,12 +22,21 @@ pub enum Widget {
     Focus,
     Water,
     Todo,
+    Launcher,
     Prayer,
     Clipboard,
 }
 
 impl Widget {
-    pub const ALL: [Widget; 6] = [Widget::Music, Widget::Focus, Widget::Water, Widget::Todo, Widget::Prayer, Widget::Clipboard];
+    pub const ALL: [Widget; 7] = [
+        Widget::Music,
+        Widget::Focus,
+        Widget::Water,
+        Widget::Todo,
+        Widget::Launcher,
+        Widget::Prayer,
+        Widget::Clipboard,
+    ];
 }
 
 /// Status proses yang dilaporkan lewat `topline progress ...`.
@@ -65,6 +74,9 @@ const MAX_CLIP_CHARS: usize = 4000;
 pub const MAX_CLIPS_VISIBLE: usize = 6;
 const CLIP_COPIED_MS: i64 = 1200;
 const TRACK_PEEK_MS: i64 = 1600;
+/// Jumlah sematan launcher maksimum (grid 4 x 2).
+pub const MAX_PINS: usize = 8;
+const PIN_NOTICE_MS: i64 = 3500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -127,6 +139,8 @@ pub enum PeekKind {
     DownloadDone { name: String },
     /// Ganti lagu lewat gestur scroll; judul kosong sampai snapshot media baru tiba.
     Track { title: String, next: bool },
+    /// Sematan launcher gagal dibuka.
+    LaunchFailed { name: String },
 }
 
 impl PeekKind {
@@ -135,7 +149,7 @@ impl PeekKind {
         match self {
             PeekKind::Volume { .. } | PeekKind::CapsLock { .. } | PeekKind::Track { .. } => 1,
             PeekKind::Charging { .. } | PeekKind::Unplugged { .. } | PeekKind::NetworkBack | PeekKind::Progress { .. } => 2,
-            PeekKind::WaterReminder | PeekKind::DownloadDone { .. } => 3,
+            PeekKind::WaterReminder | PeekKind::DownloadDone { .. } | PeekKind::LaunchFailed { .. } => 3,
             PeekKind::NetworkLost
             | PeekKind::BatteryLow { .. }
             | PeekKind::CamMic { .. }
@@ -240,6 +254,19 @@ pub enum Command {
     SetAdzanSound(bool),
     SetClipboardHistory(bool),
     SetScrollGestures(bool),
+    /// Drag dari Explorer/Start masuk ke notch: buka launcher dengan zona jatuh.
+    DragEnter,
+    /// Drag keluar tanpa drop: tutup lagi jika notch dibuka oleh drag.
+    DragLeave,
+    /// Drop: sematkan (maks. [`MAX_PINS`], duplikat diabaikan).
+    AddPins(Vec<PinInput>),
+    RemovePin(u64),
+    /// Pindahkan sematan ke indeks `to` (atur ulang dengan drag di dalam launcher).
+    MovePin { id: u64, to: usize },
+    /// Buka target: core menutup notch dan mengembalikan [`Effects::launch`].
+    LaunchPin(u64),
+    /// Tanya konfirmasi lepas sematan untuk target yang hilang (None = batal).
+    AskRemovePin(Option<u64>),
     /// Salin ulang entri riwayat clipboard.
     CopyClip(u64),
     PinClip(u64),
@@ -267,6 +294,8 @@ pub enum SystemEvent {
     DownloadDone { name: String },
     /// Hasil layanan lokasi Windows untuk jadwal sholat (None = gagal / ditolak).
     Location(Option<GeoPoint>),
+    /// ShellExecuteEx gagal membuka sematan.
+    LaunchFailed { name: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -285,6 +314,8 @@ pub struct Effects {
     pub clipboard: Option<String>,
     /// Nama file di folder Downloads yang harus ditampilkan di Explorer.
     pub reveal: Option<String>,
+    /// Sematan yang harus dibuka (ShellExecuteEx di lapisan aplikasi).
+    pub launch: Option<Pin>,
 }
 
 impl Effects {
@@ -299,6 +330,9 @@ impl Effects {
         }
         if o.reveal.is_some() {
             self.reveal = o.reveal;
+        }
+        if o.launch.is_some() {
+            self.launch = o.launch;
         }
     }
 }
@@ -320,6 +354,14 @@ pub struct Core {
     /// Judul saat gestur ganti lagu dilakukan; peek Track menunggu judul yang berbeda.
     track_from: Option<String>,
     pub gestures: ScrollGestures,
+    /// Drag OLE sedang di atas notch (zona jatuh disorot).
+    pub dragging: bool,
+    /// Notch dibuka oleh drag (ditutup lagi jika drag dibatalkan).
+    drag_opened: bool,
+    /// Sematan yang sedang ditanya "Lepas sematan?".
+    pub pin_confirm: Option<u64>,
+    /// Pesan singkat di launcher (mis. batas sematan) dan batas waktunya.
+    pub pin_notice: Option<(String, i64)>,
     /// Input pengguna terakhir (Clock::ms), dari GetLastInputInfo.
     last_input_ms: Option<i64>,
     pub eye_sleeping: bool,
@@ -370,6 +412,10 @@ impl Core {
             media_title: None,
             track_from: None,
             gestures: ScrollGestures::default(),
+            dragging: false,
+            drag_opened: false,
+            pin_confirm: None,
+            pin_notice: None,
             last_input_ms: None,
             eye_sleeping: false,
             eye_happy_until: None,
@@ -756,6 +802,64 @@ impl Core {
                 self.data.settings.scroll_gestures = on;
                 fx.save = true;
             }
+            Command::DragEnter => {
+                self.dragging = true;
+                if !self.is_open() {
+                    self.drag_opened = true;
+                }
+                self.open(Widget::Launcher);
+            }
+            Command::DragLeave => {
+                self.dragging = false;
+                if std::mem::take(&mut self.drag_opened) {
+                    self.close();
+                }
+            }
+            Command::AddPins(items) => {
+                self.dragging = false;
+                self.drag_opened = false;
+                let mut full = false;
+                for it in items {
+                    let target = it.target.trim().to_string();
+                    let key = target.to_lowercase();
+                    if target.is_empty() || self.data.pins.iter().any(|p| p.target.to_lowercase() == key) {
+                        continue;
+                    }
+                    if self.data.pins.len() >= MAX_PINS {
+                        full = true;
+                        break;
+                    }
+                    let id = self.data.next_id;
+                    self.data.next_id += 1;
+                    let name = if it.name.trim().is_empty() { target.clone() } else { it.name.trim().to_string() };
+                    self.data.pins.push(Pin { id, kind: it.kind, target, name });
+                    fx.save = true;
+                }
+                if full {
+                    self.pin_notice = Some(("Maksimal 8. Lepas satu sematan dulu.".into(), now.ms + PIN_NOTICE_MS));
+                }
+                self.open(Widget::Launcher);
+            }
+            Command::RemovePin(id) => {
+                self.data.pins.retain(|p| p.id != id);
+                self.pin_confirm = None;
+                fx.save = true;
+            }
+            Command::MovePin { id, to } => {
+                if let Some(i) = self.data.pins.iter().position(|p| p.id == id) {
+                    let p = self.data.pins.remove(i);
+                    let to = to.min(self.data.pins.len());
+                    self.data.pins.insert(to, p);
+                    fx.save = i != to;
+                }
+            }
+            Command::LaunchPin(id) => {
+                if let Some(p) = self.data.pins.iter().find(|p| p.id == id) {
+                    fx.launch = Some(p.clone());
+                    self.close();
+                }
+            }
+            Command::AskRemovePin(id) => self.pin_confirm = id,
             Command::DeleteClip(id) => self.clips.retain(|c| c.id != id),
             Command::ClearClips => self.clips.retain(|c| c.pinned),
         }
@@ -776,12 +880,16 @@ impl Core {
         if w != Widget::Todo {
             self.adding_todo = false;
         }
+        if w != Widget::Launcher {
+            self.pin_confirm = None;
+        }
         self.view = View::Expanded(w);
         self.last_widget = w;
     }
 
     fn close(&mut self) {
         self.adding_todo = false;
+        self.pin_confirm = None;
         self.view = if self.peek.is_some() { View::Peek } else { View::Idle };
     }
 
@@ -908,6 +1016,7 @@ impl Core {
                 }
             },
             SystemEvent::DownloadDone { name } => self.push_peek(PeekKind::DownloadDone { name }, now),
+            SystemEvent::LaunchFailed { name } => self.push_peek(PeekKind::LaunchFailed { name }, now),
             SystemEvent::Location(point) => {
                 let Some(g) = point else {
                     self.push_peek(PeekKind::Location { place: None }, now);
@@ -1069,6 +1178,10 @@ impl Core {
             self.clip_copied = None;
             fx.redraw = true;
         }
+        if self.pin_notice.as_ref().map_or(false, |(_, t)| now.ms >= *t) {
+            self.pin_notice = None;
+            fx.redraw = true;
+        }
 
         // Mata: ekspresi sementara kedaluwarsa, lalu cek waktu tidur.
         for t in [&mut self.eye_happy_until, &mut self.eye_greet_until] {
@@ -1118,6 +1231,9 @@ impl Core {
         }
         if let Some((_, t)) = self.clip_copied {
             consider(t);
+        }
+        if let Some((_, t)) = &self.pin_notice {
+            consider(*t);
         }
         // mata (hanya saat Personality aktif)
         if self.data.settings.personality {
@@ -1699,5 +1815,84 @@ mod tests {
         t.ms += 100;
         assert_eq!(c.scroll(ScrollZone::Tabs, -120, false, false, &t), None, "cooldown");
         assert_eq!(c.view, View::Expanded(Widget::Focus));
+    }
+    fn pin(t: &str) -> PinInput {
+        PinInput { kind: PinKind::File, target: t.into(), name: String::new() }
+    }
+
+    #[test]
+    fn pins_limit_and_dedupe() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        let fx = c.apply(Command::AddPins(vec![pin(r"C:\a.txt"), pin(r"c:\A.TXT"), pin(r"C:\b")]), &t0);
+        assert!(fx.save);
+        assert_eq!(c.data.pins.len(), 2, "duplikat (beda huruf besar/kecil) diabaikan");
+        assert_eq!(c.data.pins[0].name, r"C:\a.txt", "nama kosong memakai target");
+        assert_eq!(c.view, View::Expanded(Widget::Launcher));
+        assert!(c.pin_notice.is_none());
+        let more: Vec<PinInput> = (0..10).map(|i| pin(&format!(r"C:\f{i}"))).collect();
+        c.apply(Command::AddPins(more), &t0);
+        assert_eq!(c.data.pins.len(), MAX_PINS);
+        assert_eq!(c.data.pins[7].target, r"C:\f5");
+        let (msg, until) = c.pin_notice.clone().unwrap();
+        assert_eq!(msg, "Maksimal 8. Lepas satu sematan dulu.");
+        assert_eq!(c.next_deadline_ms(&t0), Some(until));
+        let mut t1 = t0;
+        t1.ms = until;
+        assert!(c.tick(&t1).redraw);
+        assert!(c.pin_notice.is_none());
+        // duplikat saat penuh tidak memunculkan pesan
+        c.apply(Command::AddPins(vec![pin(r"C:\B")]), &t1);
+        assert!(c.pin_notice.is_none());
+    }
+
+    #[test]
+    fn pins_move_remove_and_launch() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        c.apply(Command::AddPins(vec![pin("a"), pin("b"), pin("c"), pin("d")]), &t0);
+        let ids: Vec<u64> = c.data.pins.iter().map(|p| p.id).collect();
+        let order = |c: &Core| c.data.pins.iter().map(|p| p.target.as_str()).collect::<String>();
+        c.apply(Command::MovePin { id: ids[0], to: 2 }, &t0);
+        assert_eq!(order(&c), "bcad");
+        c.apply(Command::MovePin { id: ids[3], to: 0 }, &t0);
+        assert_eq!(order(&c), "dbca");
+        c.apply(Command::MovePin { id: ids[1], to: 99 }, &t0);
+        assert_eq!(order(&c), "dcab", "indeks di luar batas = paling akhir");
+        c.apply(Command::AskRemovePin(Some(ids[2])), &t0);
+        assert_eq!(c.pin_confirm, Some(ids[2]));
+        c.apply(Command::RemovePin(ids[2]), &t0);
+        assert_eq!(order(&c), "dab");
+        assert_eq!(c.pin_confirm, None);
+        let fx = c.apply(Command::LaunchPin(ids[3]), &t0);
+        assert_eq!(fx.launch.map(|p| p.target), Some("d".to_string()));
+        assert!(!c.is_open(), "notch menutup setelah membuka target");
+        c.system(SystemEvent::LaunchFailed { name: "d".into() }, &t0);
+        assert_eq!(c.peek.as_ref().map(|p| p.kind.clone()), Some(PeekKind::LaunchFailed { name: "d".into() }));
+    }
+
+    #[test]
+    fn drag_opens_launcher_and_cancel_restores() {
+        let t0 = clock(10, 0, 0);
+        let mut c = quiet_core(&t0);
+        c.apply(Command::DragEnter, &t0);
+        assert!(c.dragging);
+        assert_eq!(c.view, View::Expanded(Widget::Launcher));
+        c.apply(Command::DragLeave, &t0);
+        assert!(!c.dragging);
+        assert_eq!(c.view, View::Idle, "dibuka oleh drag: ditutup lagi");
+        // notch sudah terbuka: drag batal tidak menutup
+        c.apply(Command::Open(Widget::Water), &t0);
+        c.apply(Command::DragEnter, &t0);
+        assert_eq!(c.view, View::Expanded(Widget::Launcher));
+        c.apply(Command::DragLeave, &t0);
+        assert!(c.is_open());
+        // drop: tetap terbuka
+        c.apply(Command::Close, &t0);
+        c.apply(Command::DragEnter, &t0);
+        c.apply(Command::AddPins(vec![pin("x")]), &t0);
+        assert!(!c.dragging);
+        assert_eq!(c.view, View::Expanded(Widget::Launcher));
+        assert!(c.tabs().contains(&Widget::Launcher));
     }
 }

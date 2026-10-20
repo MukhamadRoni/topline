@@ -9,9 +9,9 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
 use windows::Win32::Graphics::Dwm::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::Com::*;
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Ole::{IDropTarget, OleInitialize, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::System::WinRT::*;
 use windows::Win32::UI::HiDpi::*;
@@ -26,6 +26,7 @@ use topline_store::Store;
 use crate::clip;
 use crate::editbox::EditBox;
 use crate::gfx::Gfx;
+use crate::launcher::{self, DropEvent, Icons};
 use crate::media::{self, MediaHandle, MediaInfo};
 use crate::notch::Notch;
 use crate::sysmon::{self, SysMon};
@@ -91,6 +92,19 @@ struct App {
     eye_motion: bool,
     /// Indeks EyeMood::ALL yang sedang didemokan.
     eye_demo: Option<usize>,
+    /// Drop target OLE yang terdaftar di jendela notch.
+    drop_target: Option<IDropTarget>,
+    icons: Icons,
+    /// Sematan yang targetnya hilang (dicek saat launcher digambar).
+    missing: Vec<u64>,
+    /// Tile ditekan: (id, x, y) saat tombol kiri turun.
+    press: Option<(u64, f32, f32)>,
+    /// Drag atur ulang yang sedang berjalan: (id, indeks tujuan).
+    reorder: Option<(u64, usize)>,
+    /// Kotak slot tile dari frame terakhir.
+    slots: Vec<(f32, f32, f32, f32)>,
+    /// Sematan yang dibuka setelah notch selesai digambar ulang (menutup).
+    pending_launch: Option<Pin>,
 }
 
 fn scale_of(hwnd: HWND) -> f32 {
@@ -144,7 +158,20 @@ impl App {
             origin: (0, 0),
             eye_motion: util::animations_enabled(),
             eye_demo: util::eye_demo_enabled().then_some(0),
+            drop_target: None,
+            icons: Icons::default(),
+            missing: Vec::new(),
+            press: None,
+            reorder: None,
+            slots: Vec::new(),
+            pending_launch: None,
         };
+        // Drag & drop dari Explorer/Start ke notch (UI thread STA, OleInitialize di run()).
+        let dt: IDropTarget = launcher::DropTarget::new(hwnd).into();
+        match unsafe { RegisterDragDrop(hwnd, &dt) } {
+            Ok(()) => app.drop_target = Some(dt),
+            Err(e) => util::log(&format!("RegisterDragDrop error: {e}")),
+        }
         util::log(&format!(
             "start: scale={} backdrop={} geist={} view={:?}",
             scale, app.notch.has_backdrop, app.gfx.geist, app.core.view
@@ -214,12 +241,20 @@ impl App {
         if view_changed {
             self.hover = None;
         }
+        if self.core.widget() == Some(Widget::Launcher) {
+            // Ikon diekstrak sekali per target; keberadaan target dicek hanya saat launcher digambar.
+            self.icons.ensure(&self.gfx, &self.core.data.pins, self.notch.scale);
+            self.missing = self.core.data.pins.iter().filter(|p| !launcher::exists(&p.target)).map(|p| p.id).collect();
+        }
         let ctx = view::Ctx {
             core: &self.core,
             now: &now,
             media: self.media_info.as_ref(),
             cover: self.cover.as_ref(),
             hover: self.hover.as_ref(),
+            icons: &self.icons,
+            missing: &self.missing,
+            reorder: self.reorder,
         };
         let mut frame = None;
         if let Err(e) = self.notch.draw(&self.gfx, |p| frame = Some(view::draw(p, &ctx))) {
@@ -236,6 +271,11 @@ impl App {
         ));
         if view_changed {
             let _ = self.notch.fade_in_content();
+            // Aplikasi yang baru dibuka (mis. dari launcher) kadang menyusup di atas jendela
+            // topmost; tegaskan lagi urutan-z setiap kali tampilan berubah.
+            unsafe {
+                let _ = SetWindowPos(self.hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
         }
         let _ = self.notch.show_eq(frame.eq, Color { A: 255, R: 0x40, G: 0xA9, B: 0xFD });
         let eyes = match (self.eye_demo, frame.eyes) {
@@ -249,6 +289,7 @@ impl App {
         self.sys.watch_mouse(self.core.eye_sleeping && frame.eyes.is_some());
         self.hits = frame.hits;
         self.scroll_zones = frame.scroll;
+        self.slots = frame.slots;
         self.last_view = self.core.view;
 
         // Region: membesar segera, mengecil setelah animasi selesai.
@@ -332,6 +373,74 @@ impl App {
         let fx = self.core.apply(cmd, &now);
         self.effects(fx);
         self.refresh();
+        // Buka target setelah notch mulai menutup (ShellExecuteEx bisa butuh waktu).
+        if let Some(pin) = self.pending_launch.take() {
+            self.launch(&pin, false);
+        }
+    }
+
+    fn launch(&mut self, pin: &Pin, admin: bool) {
+        if !launcher::launch(self.hwnd, &pin.target, admin) {
+            util::log(&format!("launch gagal: {}", pin.target));
+            self.system(SystemEvent::LaunchFailed { name: pin.name.clone() });
+        }
+    }
+
+    fn pin_menu(&mut self, id: u64) {
+        let Some(pin) = self.core.data.pins.iter().find(|p| p.id == id).cloned() else { return };
+        let choice = launcher::pin_menu(self.host, &pin);
+        util::log(&format!("pin menu {} -> {}", pin.id, choice));
+        match choice {
+            launcher::MENU_REVEAL => {
+                self.command(Command::Close);
+                launcher::reveal(&pin.target);
+            }
+            launcher::MENU_ADMIN => {
+                self.command(Command::Close);
+                self.launch(&pin, true);
+            }
+            launcher::MENU_UNPIN => self.command(Command::RemovePin(id)),
+            _ => {}
+        }
+    }
+
+    fn on_drop(&mut self, ev: DropEvent) {
+        match ev {
+            DropEvent::Enter => self.command(Command::DragEnter),
+            DropEvent::Leave => self.command(Command::DragLeave),
+            DropEvent::Drop(items) => {
+                util::log(&format!("drop: {:?}", items));
+                self.command(Command::AddPins(items));
+                // Selama drag OLE tidak ada WM_MOUSEMOVE; mulai lacak keluarnya kursor dari sini.
+                self.tracking = false;
+                self.track_mouse();
+            }
+        }
+    }
+
+    fn track_mouse(&mut self) {
+        if !self.tracking {
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: self.hwnd,
+                dwHoverTime: 0,
+            };
+            unsafe {
+                let _ = TrackMouseEvent(&mut tme);
+            }
+            self.tracking = true;
+        }
+    }
+
+    /// Slot tile terdekat dari titik (DIP), untuk drag atur ulang.
+    fn slot_at(&self, x: f32, y: f32) -> usize {
+        let d = |s: &(f32, f32, f32, f32)| (s.0 + s.2 / 2.0 - x).powi(2) + (s.1 + s.3 / 2.0 - y).powi(2);
+        self.slots
+            .iter()
+            .enumerate()
+            .min_by(|a, b| d(a.1).total_cmp(&d(b.1)))
+            .map_or(0, |(i, _)| i)
     }
 
     fn effects(&mut self, fx: Effects) {
@@ -346,6 +455,9 @@ impl App {
         }
         if let Some(text) = fx.clipboard {
             clip::set_text(self.hwnd, &text);
+        }
+        if let Some(pin) = fx.launch {
+            self.pending_launch = Some(pin);
         }
         if let Some(name) = fx.reveal {
             if let Some(dir) = watch::downloads_dir() {
@@ -373,6 +485,7 @@ impl App {
                 }
                 self.refresh();
             }
+            Action::PinMenu(id) => self.pin_menu(id),
             Action::PeekWater => {
                 let now = util::now();
                 let fx = self.core.apply(Command::AddWater(250), &now);
@@ -442,6 +555,7 @@ impl App {
         match self.tray.show_menu(&st) {
             tray::ID_OPEN => self.command(Command::Open(self.core.last_widget)),
             tray::ID_ADD_TODO => self.command(Command::StartAddTodo),
+            tray::ID_LAUNCHER => self.command(Command::Open(Widget::Launcher)),
             tray::ID_HOVER => self.command(Command::SetOpenOnHover(!st.hover)),
             tray::ID_PERSONALITY => self.command(Command::SetPersonality(!st.personality)),
             tray::ID_SCROLL => self.command(Command::SetScrollGestures(!st.scroll)),
@@ -481,6 +595,9 @@ impl App {
         clip::listen(self.hwnd, false);
         self.edit.hide();
         unsafe {
+            if self.drop_target.take().is_some() {
+                let _ = RevokeDragDrop(self.hwnd);
+            }
             let _ = UnregisterHotKey(self.hwnd, HK_TOGGLE);
             let _ = UnregisterHotKey(self.hwnd, HK_ADD);
         }
@@ -500,18 +617,19 @@ impl App {
         };
         match msg {
             WM_MOUSEMOVE => {
-                if !self.tracking {
-                    let mut tme = TRACKMOUSEEVENT {
-                        cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
-                        dwFlags: TME_LEAVE,
-                        hwndTrack: self.hwnd,
-                        dwHoverTime: 0,
-                    };
-                    unsafe {
-                        let _ = TrackMouseEvent(&mut tme);
+                // Drag atur ulang tile launcher (mouse capture biasa, tanpa OLE).
+                if let Some((id, px, py)) = self.press {
+                    let (x, y) = mouse();
+                    if self.reorder.is_some() || (x - px).hypot(y - py) > 6.0 {
+                        let to = self.slot_at(x, y);
+                        if self.reorder != Some((id, to)) {
+                            self.reorder = Some((id, to));
+                            self.refresh();
+                        }
+                        return Some(LRESULT(0));
                     }
-                    self.tracking = true;
                 }
+                self.track_mouse();
                 unsafe {
                     let _ = KillTimer(self.hwnd, T_HOVER_CLOSE);
                 }
@@ -564,7 +682,33 @@ impl App {
                 }
                 Some(LRESULT(0))
             }
+            WM_LBUTTONDOWN => {
+                let (x, y) = mouse();
+                if let Some(id) = self.hit_at(x, y).and_then(|h| h.drag) {
+                    self.press = Some((id, x, y));
+                    unsafe {
+                        SetCapture(self.hwnd);
+                    }
+                }
+                Some(LRESULT(0))
+            }
+            WM_CAPTURECHANGED => {
+                self.press = None;
+                if self.reorder.take().is_some() {
+                    self.refresh();
+                }
+                Some(LRESULT(0))
+            }
             WM_LBUTTONUP => {
+                if self.press.take().is_some() {
+                    unsafe {
+                        let _ = ReleaseCapture();
+                    }
+                    if let Some((id, to)) = self.reorder.take() {
+                        self.command(Command::MovePin { id, to });
+                        return Some(LRESULT(0));
+                    }
+                }
                 let (x, y) = mouse();
                 unsafe {
                     let _ = KillTimer(self.hwnd, T_HOVER_OPEN);
@@ -721,6 +865,12 @@ impl App {
                 self.system(SystemEvent::DownloadDone { name });
                 Some(LRESULT(0))
             }
+            WM_APP_DROP => {
+                // Box<DropEvent> dari launcher::DropTarget saat App sedang dipinjam.
+                let ev = unsafe { *Box::from_raw(lp.0 as *mut DropEvent) };
+                self.on_drop(ev);
+                Some(LRESULT(0))
+            }
             WM_APP_LOCATION => {
                 // Box<GeoPoint> dari watch::locate, atau 0 jika gagal.
                 let point = (lp.0 != 0).then(|| unsafe { *Box::from_raw(lp.0 as *mut GeoPoint) });
@@ -834,6 +984,24 @@ impl App {
     }
 }
 
+/// Dipanggil dari callback IDropTarget (UI thread). Jika App sedang dipinjam (callback
+/// terjadi di dalam penanganan pesan lain), event dikirim ulang lewat WM_APP_DROP.
+pub fn drop_event(hwnd: HWND, ev: DropEvent) {
+    let mut ev = Some(ev);
+    APP.with(|a| {
+        if let Ok(mut g) = a.try_borrow_mut() {
+            if let (Some(app), Some(e)) = (g.as_mut(), ev.take()) {
+                app.on_drop(e);
+            }
+        }
+    });
+    if let Some(e) = ev {
+        unsafe {
+            let _ = PostMessageW(hwnd, WM_APP_DROP, WPARAM(0), LPARAM(Box::into_raw(Box::new(e)) as isize));
+        }
+    }
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_MOUSEACTIVATE {
         return LRESULT(MA_NOACTIVATE as isize);
@@ -886,7 +1054,8 @@ pub fn run() {
             return;
         }
 
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        // OLE (tetap STA) untuk drag & drop; kompatibel dengan DispatcherQueue.
+        let _ = OleInitialize(None);
         let opts = DispatcherQueueOptions {
             dwSize: size_of::<DispatcherQueueOptions>() as u32,
             threadType: DQTYPE_THREAD_CURRENT,

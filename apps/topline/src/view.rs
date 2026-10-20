@@ -6,6 +6,7 @@ use windows::Win32::Graphics::Direct2D::ID2D1Bitmap;
 use topline_core::*;
 
 use crate::gfx::{Align, Font, Painter};
+use crate::launcher::Icons;
 use crate::media::{MediaCmd, MediaInfo};
 use crate::theme::*;
 
@@ -15,6 +16,8 @@ pub enum Action {
     Media(MediaCmd),
     /// Tambah 250 ml langsung dari peek pengingat.
     PeekWater,
+    /// Menu konteks tile launcher.
+    PinMenu(u64),
 }
 
 #[derive(Clone, Debug)]
@@ -26,6 +29,8 @@ pub struct Hit {
     pub action: Action,
     /// Aksi klik kanan (mis. hapus tugas).
     pub alt: Option<Action>,
+    /// Tile launcher yang bisa diseret untuk mengatur ulang urutan.
+    pub drag: Option<u64>,
 }
 
 impl Hit {
@@ -40,6 +45,11 @@ pub struct Ctx<'a> {
     pub media: Option<&'a MediaInfo>,
     pub cover: Option<&'a ID2D1Bitmap>,
     pub hover: Option<&'a Action>,
+    pub icons: &'a Icons,
+    /// Sematan yang targetnya tidak ditemukan (dicek saat launcher digambar).
+    pub missing: &'a [u64],
+    /// Tile yang sedang diseret dan indeks tujuannya.
+    pub reorder: Option<(u64, usize)>,
 }
 
 pub struct Frame {
@@ -55,6 +65,8 @@ pub struct Frame {
     pub eyes: Option<EyeMood>,
     /// Area gestur scroll (x, y, w, h, zona); di luar area ini scroll diabaikan.
     pub scroll: Vec<(f32, f32, f32, f32, ScrollZone)>,
+    /// Kotak slot tile launcher, urut indeks (untuk drag atur ulang).
+    pub slots: Vec<(f32, f32, f32, f32)>,
 }
 
 fn todo_body_h(c: &Ctx) -> f32 {
@@ -67,8 +79,17 @@ fn clip_body_h(c: &Ctx) -> f32 {
     28.0 + 4.0 + rows * 44.0
 }
 
+fn launcher_body_h(c: &Ctx) -> f32 {
+    match c.core.data.pins.len() {
+        0 => 120.0,
+        n if n <= PIN_COLS => PIN_H,
+        _ => PIN_H * 2.0 + PIN_GAP,
+    }
+}
+
 fn body_h(c: &Ctx, w: Widget) -> f32 {
     match w {
+        Widget::Launcher => launcher_body_h(c),
         Widget::Music => 164.0,
         Widget::Focus => 120.0,
         Widget::Water => 168.0,
@@ -106,12 +127,12 @@ struct B<'p, 'a> {
 impl<'p, 'a> B<'p, 'a> {
     fn hit(&mut self, x: f32, y: f32, w: f32, h: f32, action: Action) -> bool {
         let hov = self.hover.as_ref() == Some(&action);
-        self.hits.push(Hit { x, y, w, h, action, alt: None });
+        self.hits.push(Hit { x, y, w, h, action, alt: None, drag: None });
         hov
     }
     fn hit_alt(&mut self, x: f32, y: f32, w: f32, h: f32, action: Action, alt: Action) -> bool {
         let hov = self.hover.as_ref() == Some(&action);
-        self.hits.push(Hit { x, y, w, h, action, alt: Some(alt) });
+        self.hits.push(Hit { x, y, w, h, action, alt: Some(alt), drag: None });
         hov
     }
 
@@ -160,6 +181,7 @@ pub fn draw(p: &Painter, c: &Ctx) -> Frame {
     let mut edit = None;
     let mut eq = false;
     let mut scroll = Vec::new();
+    let mut slots = Vec::new();
 
     // Garis tepi kaca + highlight (sudut atas berada di luar layar).
     p.stroke_rrect(nx, -r, w, h + r, r, GLASS_BORDER, 1.0);
@@ -188,12 +210,13 @@ pub fn draw(p: &Painter, c: &Ctx) -> Frame {
                 Widget::Todo => edit = draw_todo(&mut b, c, x0, y0),
                 Widget::Prayer => draw_prayer(&mut b, c, x0, y0),
                 Widget::Clipboard => draw_clipboard(&mut b, c, x0, y0),
+                Widget::Launcher => slots = draw_launcher(&mut b, c, x0, y0),
             }
             draw_tabs(&mut b, c, wd, h);
         }
     }
     let eyes = (c.core.view == View::Idle && c.core.data.settings.personality).then(|| c.core.eye_mood(c.now));
-    Frame { w, h, r, hits: b.hits, edit, eq, eyes, scroll }
+    Frame { w, h, r, hits: b.hits, edit, eq, eyes, scroll, slots }
 }
 
 // ------------------------------------------------------------------ idle
@@ -253,7 +276,7 @@ fn draw_peek(b: &mut B, c: &Ctx, nx: f32, w: f32) {
     let tx = nx + 46.0;
     let right = nx + w - 16.0;
     // seluruh peek bisa diklik
-    b.hits.push(Hit { x: nx, y: 0.0, w, h, action: Action::Cmd(Command::ActivatePeek), alt: Some(Action::Cmd(Command::DismissPeek)) });
+    b.hits.push(Hit { x: nx, y: 0.0, w, h, action: Action::Cmd(Command::ActivatePeek), alt: Some(Action::Cmd(Command::DismissPeek)), drag: None });
     let text = |s: &str, c: Rgba, width: f32| p.text(s, tx, 0.0, width, h, 14.0, 400, Font::Sans, Align::Left, c);
     let value = |s: &str, c: Rgba| p.text(s, right - 80.0, 0.0, 80.0, h, 14.0, 500, Font::Sans, Align::Right, c);
     match &peek.kind {
@@ -314,7 +337,7 @@ fn draw_peek(b: &mut B, c: &Ctx, nx: f32, w: f32) {
             let bx = right - bw + 6.0;
             let hov = b.hover.as_ref() == Some(&Action::PeekWater);
             // tombol ditambahkan setelah hit peek agar menang saat dicari dari belakang
-            b.hits.push(Hit { x: bx, y: cy - 14.0, w: bw, h: 28.0, action: Action::PeekWater, alt: None });
+            b.hits.push(Hit { x: bx, y: cy - 14.0, w: bw, h: 28.0, action: Action::PeekWater, alt: None, drag: None });
             p.fill_rrect(bx, cy - 14.0, bw, 28.0, 14.0, if hov { ICE.with_alpha(0.88) } else { ICE });
             p.text("+250 ml", bx, cy - 14.0, bw, 28.0, 13.0, 500, Font::Sans, Align::Center, NAVY);
         }
@@ -380,6 +403,10 @@ fn draw_peek(b: &mut B, c: &Ctx, nx: f32, w: f32) {
             };
             text(t, TEXT_1, w - 62.0);
         }
+        PeekKind::LaunchFailed { name } => {
+            p.icon(G_CANCEL, ix, cy, 15.0, AMBER);
+            text(&format!("Tidak bisa membuka {}", name), TEXT_1, w - 62.0);
+        }
     }
 }
 
@@ -388,7 +415,13 @@ fn draw_peek(b: &mut B, c: &Ctx, nx: f32, w: f32) {
 fn draw_header(b: &mut B, c: &Ctx, nx: f32) {
     let p = b.p;
     let y = PAD_TOP;
-    p.label(&c.now.short_date_id(), nx + PAD_X, y + 12.0, 200.0, 16.0, 12.0, Align::Left, TEXT_2);
+    match (&c.core.pin_notice, c.core.widget()) {
+        // pesan launcher (mis. batas sematan) menggantikan label tanggal sementara
+        (Some((msg, _)), Some(Widget::Launcher)) => {
+            p.text(msg, nx + PAD_X, y, 236.0, HEADER_H, 12.0, 500, Font::Sans, Align::Left, AMBER)
+        }
+        _ => p.label(&c.now.short_date_id(), nx + PAD_X, y + 12.0, 200.0, 16.0, 12.0, Align::Left, TEXT_2),
+    }
     p.text(&c.now.hhmm(), nx, y, EXP_W, HEADER_H, 15.0, 500, Font::Sans, Align::Center, TEXT_1);
     let bx = nx + EXP_W - PAD_X - 40.0;
     let hov = b.hit(bx, y, 40.0, 40.0, Action::Cmd(Command::Close));
@@ -705,6 +738,109 @@ fn draw_clipboard(b: &mut B, c: &Ctx, x0: f32, y0: f32) {
     }
 }
 
+// ------------------------------------------------------------------ launcher
+
+/// Ikon kotak 2x2 (tab Launcher, aplikasi tanpa ikon) digambar dengan rrect.
+fn grid_icon(p: &Painter, cx: f32, cy: f32, size: f32, col: Rgba) {
+    let cell = size * 0.42;
+    let gap = size - cell * 2.0;
+    for (i, j) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+        let x = cx - size / 2.0 + i * (cell + gap);
+        let y = cy - size / 2.0 + j * (cell + gap);
+        p.fill_rrect(x, y, cell, cell, cell * 0.3, col);
+    }
+}
+
+/// Grid sematan 4 x 2. Mengembalikan kotak slot (untuk drag atur ulang).
+fn draw_launcher(b: &mut B, c: &Ctx, x0: f32, y0: f32) -> Vec<(f32, f32, f32, f32)> {
+    let p = b.p;
+    let inner = EXP_W - PAD_X * 2.0;
+    let bh = launcher_body_h(c);
+    let mut pins: Vec<&Pin> = c.core.data.pins.iter().collect();
+    if let Some((id, to)) = c.reorder {
+        if let Some(i) = pins.iter().position(|p| p.id == id) {
+            let moving = pins.remove(i);
+            pins.insert(to.min(pins.len()), moving);
+        }
+    }
+    let slots: Vec<(f32, f32, f32, f32)> = (0..pins.len())
+        .map(|i| {
+            let (col, row) = ((i % PIN_COLS) as f32, (i / PIN_COLS) as f32);
+            (x0 + col * (PIN_W + PIN_GAP), y0 + row * (PIN_H + PIN_GAP), PIN_W, PIN_H)
+        })
+        .collect();
+
+    if pins.is_empty() && !c.core.dragging {
+        // keadaan kosong: zona putus-putus besar
+        p.fill_rrect(x0, y0, inner, bh, PIN_R, Rgba(1.0, 1.0, 1.0, 0.04));
+        p.stroke_rrect_dashed(x0, y0, inner, bh, PIN_R, Rgba(1.0, 1.0, 1.0, 0.26), 1.0);
+        grid_icon(p, x0 + inner / 2.0, y0 + 44.0, 22.0, TEXT_2);
+        p.text("Seret aplikasi, file, atau folder ke sini.", x0, y0 + 64.0, inner, 28.0, 14.0, 400, Font::Sans, Align::Center, TEXT_2);
+        return slots;
+    }
+
+    for (pin, &(x, y, w, h)) in pins.iter().zip(&slots) {
+        let missing = c.missing.contains(&pin.id);
+        let moving = c.reorder.map_or(false, |(id, _)| id == pin.id);
+        if c.core.pin_confirm == Some(pin.id) {
+            // "Lepas sematan?" untuk target yang hilang
+            p.fill_rrect(x, y, w, h, PIN_R, CARD_FILL);
+            p.stroke_rrect(x, y, w, h, PIN_R, AMBER.with_alpha(0.5), 1.0);
+            p.text("Lepas sematan?", x, y + 14.0, w, 20.0, 12.0, 500, Font::Sans, Align::Center, TEXT_1);
+            p.text(&pin.name, x + 10.0, y + 34.0, w - 20.0, 18.0, 11.0, 400, Font::Sans, Align::Center, TEXT_3);
+            let bw = (w - 8.0 * 2.0 - 6.0) / 2.0;
+            let by = y + h - 12.0 - 28.0;
+            let hov = b.hit(x + 8.0, by, bw, 28.0, Action::Cmd(Command::RemovePin(pin.id)));
+            p.fill_rrect(x + 8.0, by, bw, 28.0, 14.0, if hov { ICE.with_alpha(0.88) } else { ICE });
+            p.text("Lepas", x + 8.0, by, bw, 28.0, 12.0, 500, Font::Sans, Align::Center, NAVY);
+            let bx = x + 8.0 + bw + 6.0;
+            let hov = b.hit(bx, by, bw, 28.0, Action::Cmd(Command::AskRemovePin(None)));
+            p.fill_rrect(bx, by, bw, 28.0, 14.0, if hov { GLASS_FILL_HOVER } else { GLASS_FILL });
+            p.stroke_rrect(bx, by, bw, 28.0, 14.0, GLASS_BORDER, 1.0);
+            p.text("Batal", bx, by, bw, 28.0, 12.0, 500, Font::Sans, Align::Center, TEXT_1);
+            continue;
+        }
+        let action = if missing { Action::Cmd(Command::AskRemovePin(Some(pin.id))) } else { Action::Cmd(Command::LaunchPin(pin.id)) };
+        let hov = b.hover.as_ref() == Some(&action);
+        b.hits.push(Hit { x, y, w, h, action, alt: Some(Action::PinMenu(pin.id)), drag: Some(pin.id) });
+        p.fill_rrect(x, y, w, h, PIN_R, if hov || moving { GLASS_FILL_HOVER } else { CARD_FILL });
+        p.stroke_rrect(x, y, w, h, PIN_R, if moving { SKY } else { CARD_BORDER }, if moving { 1.5 } else { 1.0 });
+        let (ix, iy) = (x + (w - PIN_ICON) / 2.0, y + 14.0);
+        let alpha = if missing { 0.35 } else { 1.0 };
+        match c.icons.get(&pin.target) {
+            Some(bmp) => p.bitmap(bmp, ix, iy, PIN_ICON, PIN_ICON, alpha),
+            None => {
+                let col = TEXT_2.with_alpha(0.72 * alpha);
+                let (cx, cy) = (ix + PIN_ICON / 2.0, iy + PIN_ICON / 2.0);
+                match pin.kind {
+                    PinKind::Folder => p.icon(G_FOLDER, cx, cy, 30.0, col),
+                    PinKind::File => p.icon(G_DOCUMENT, cx, cy, 30.0, col),
+                    PinKind::App => grid_icon(p, cx, cy, 28.0, col),
+                }
+            }
+        }
+        if missing {
+            p.text(&pin.name, x + 8.0, y + 64.0, w - 16.0, 18.0, 12.0, 400, Font::Sans, Align::Center, TEXT_3);
+            p.label("Tidak ditemukan", x, y + 82.0, w, 14.0, 11.0, Align::Center, AMBER.with_alpha(0.8));
+        } else {
+            p.text(&pin.name, x + 8.0, y + 70.0, w - 16.0, 20.0, 12.0, 400, Font::Sans, Align::Center, TEXT_1);
+        }
+    }
+
+    if c.core.dragging {
+        // zona jatuh disorot di atas seluruh isi
+        let full = pins.len() >= MAX_PINS;
+        let col = if full { AMBER } else { SKY };
+        p.fill_rrect(x0, y0, inner, bh, PIN_R, Rgba(0.04, 0.07, 0.18, 0.86));
+        p.fill_rrect(x0, y0, inner, bh, PIN_R, col.with_alpha(0.12));
+        p.stroke_rrect_dashed(x0, y0, inner, bh, PIN_R, col, 1.5);
+        let msg = if full { "Maksimal 8. Lepas satu sematan dulu." } else { "Lepaskan untuk menyematkan" };
+        grid_icon(p, x0 + inner / 2.0, y0 + bh / 2.0 - 16.0, 20.0, col);
+        p.text(msg, x0, y0 + bh / 2.0 + 2.0, inner, 28.0, 14.0, 500, Font::Sans, Align::Center, TEXT_1);
+    }
+    slots
+}
+
 fn draw_tabs(b: &mut B, c: &Ctx, active: Widget, h: f32) {
     let p = b.p;
     let tabs = c.core.tabs();
@@ -733,6 +869,7 @@ fn draw_tabs(b: &mut B, c: &Ctx, active: Widget, h: f32) {
             Widget::Todo => p.icon(G_TODO, cx, cy, 16.0, col),
             Widget::Prayer => p.icon(G_MOON, cx, cy, 16.0, col),
             Widget::Clipboard => p.icon(G_PASTE, cx, cy, 16.0, col),
+            Widget::Launcher => grid_icon(p, cx, cy, 15.0, col),
         }
     }
 }

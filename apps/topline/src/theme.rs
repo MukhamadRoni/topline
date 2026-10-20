@@ -96,3 +96,13 @@ pub const G_DOWNLOAD: char = '\u{E896}';
 pub const G_CODE: char = '\u{E943}';
 pub const G_CANCEL: char = '\u{E711}';
 pub const G_LOCATION: char = '\u{E707}';
+pub const G_FOLDER: char = '\u{E8B7}';
+pub const G_DOCUMENT: char = '\u{E8A5}';
+
+// ---- launcher (DIP)
+pub const PIN_COLS: usize = 4;
+pub const PIN_GAP: f32 = 12.0;
+pub const PIN_W: f32 = (EXP_W - PAD_X * 2.0 - PIN_GAP * 3.0) / 4.0;
+pub const PIN_H: f32 = 104.0;
+pub const PIN_R: f32 = 20.0;
+pub const PIN_ICON: f32 = 48.0;

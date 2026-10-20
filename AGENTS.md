@@ -52,7 +52,8 @@ crates/topline-core/       SEMUA logika produk, tanpa Windows: Core, Command, Sy
                            clipboard), ProgressState. prayer.rs: jadwal sholat astronomis + daftar kota.
                            gesture.rs: gestur scroll (ScrollAccumulator: akumulasi delta, ambang 120,
                            cooldown; ScrollGestures: zona → volume/lagu/tab, tahan hover 1,5 s).
-                           51 unit test.
+                           Pin/PinKind/PinInput (Persisted.pins), Widget::Launcher, MAX_PINS = 8.
+                           54 unit test.
                            JANGAN menambah dependensi Windows di sini.
 crates/topline-store/      Store: data.json dengan tulis atomik (tmp + rename), .bak jika rusak. 3 unit test.
 apps/topline/src/
@@ -69,6 +70,10 @@ apps/topline/src/
                            saat mata tidur), AppBar fullscreen, suara
   tray.rs                  ikon tray + menu
   editbox.rs               input to-do inline: jendela popup kecil berisi kontrol EDIT standar
+  launcher.rs              launcher: DropTarget (#[implement(IDropTarget)]), read_items (SHCreateShellItemArray-
+                           FromDataObject → path / shell:AppsFolder\AUMID), Icons (IShellItemImageFactory →
+                           WIC → PNG di %LOCALAPPDATA%\Topline\icons → ID2D1Bitmap), launch (ShellExecuteEx),
+                           reveal (SHOpenFolderAndSelectItems), menu konteks tile
   clip.rs                  clipboard: AddClipboardFormatListener, baca teks (abaikan format rahasia), tulis teks
   watch.rs                 thread pengamat tanpa polling: kamera/mikrofon (RegNotifyChangeKeyValue pada
                            ConsentStore) dan unduhan selesai (ReadDirectoryChangesW di folder Downloads);
@@ -98,6 +103,9 @@ docs/                      ARCHITECTURE.md, DESIGN.md, ROADMAP.md
    - `T_EYE_DEMO`: hanya saat `TOPLINE_EYE_DEMO=1` dalam mode debug (lihat Verifikasi)
 
 ### Event tambahan
+- **Drag & drop (OLE).** `run()` memanggil `OleInitialize` (tetap STA, kompatibel dengan DispatcherQueue); `App::new` mendaftarkan `launcher::DropTarget` lewat `RegisterDragDrop`, `shutdown()` memanggil `RevokeDragDrop`. Callback IDropTarget berjalan di UI thread → `app::drop_event()` memakai `try_borrow_mut` pada `APP`; jika App sedang dipinjam, event dikirim ulang lewat `WM_APP_DROP` (LPARAM = `Box<DropEvent>`). Enter → `Command::DragEnter` (notch membuka Launcher; region membesar di `refresh()` sebelum animasi), Leave → `DragLeave` (menutup lagi jika dibuka oleh drag), Drop → `AddPins`. Efek drop selalu LINK (COPY jika sumber tidak mengizinkan LINK), tidak pernah MOVE.
+- Launcher: `Effects.launch` → dibuka setelah `refresh()` di `App::command` (`launcher::launch`, gagal → `SystemEvent::LaunchFailed`). Ikon dan keberadaan target hanya dicek di `refresh()` saat widget Launcher tampil. Atur ulang tile: `WM_LBUTTONDOWN` pada `Hit.drag` → `SetCapture`, geser > 6 DIP → `reorder` (pratinjau di view), `WM_LBUTTONUP` → `Command::MovePin`.
+- Setiap kali tampilan berubah, `refresh()` menegaskan ulang `HWND_TOPMOST` (aplikasi yang baru dibuka bisa menyusup di atas notch).
 - `WM_CLIPBOARDUPDATE` → `clip::read_text` → `SystemEvent::Clipboard`. `Effects.clipboard` → `clip::set_text`.
 - `WM_MOUSEWHEEL`/`WM_MOUSEHWHEEL` (koordinat layar → `ScreenToClient` / `scale`) → zona dari `Frame.scroll` → `core.scroll()` → `GestureAction`: volume (`sysmon.set_volume_step`, peek datang dari callback volume), `media.command(Next/Prev)` + peek `Track`, atau pindah tab. `WM_MBUTTONUP` → `core.middle_click()` (play/pause atau `sysmon.toggle_mute`). Hover-open ditahan lewat `core.gestures.hover_blocked(now)` (timestamp, tanpa timer).
 - `WM_APP_PRIVACY` (dari thread watch) → `watch::privacy_scan()` di UI thread → `SystemEvent::Privacy`.

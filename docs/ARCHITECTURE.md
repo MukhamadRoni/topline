@@ -59,7 +59,8 @@ UI thread (STA, DispatcherQueueController, GetMessage loop)
  ├─ Core (topline-core): state, dipanggil sinkron
  ├─ Notch/Gfx/View: Composition + D2D
  ├─ EditBox: popup + EDIT (subclass: Enter/Esc/blur → PostMessage)
- └─ SysMon: daya (WM_POWERBROADCAST), Raw Input (WM_INPUT), AppBar
+ ├─ SysMon: daya (WM_POWERBROADCAST), Raw Input (WM_INPUT), AppBar
+ └─ Launcher: IDropTarget (OleInitialize + RegisterDragDrop), ikon shell, ShellExecuteEx
 Thread media (MTA): GSMTC manager + event sesi → snapshot di Mutex → PostMessage(WM_APP_MEDIA)
 Callback threadpool: NetworkStatusChanged → WM_APP_NET; IAudioEndpointVolumeCallback → WM_APP_VOLUME
 Thread privacy: tidur di WaitForMultipleObjects (event registry + stop) → WM_APP_PRIVACY
@@ -80,15 +81,16 @@ Thread downloads: tidur di ReadDirectoryChangesW → WM_APP_DOWNLOAD
 | Clipboard | `AddClipboardFormatListener` → `WM_CLIPBOARDUPDATE`; format `ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore`, dan `CanIncludeInClipboardHistory = 0` diabaikan |
 | Kamera/mikrofon | Thread `privacy`: `RegNotifyChangeKeyValue` pada `HKCU\...\CapabilityAccessManager\ConsentStore\{webcam,microphone}` (subtree). `LastUsedTimeStop == 0` = sedang dipakai |
 | Unduhan | Thread `downloads`: `ReadDirectoryChangesW` (FILE_NAME) di folder Downloads; rename dari `.crdownload/.part/.partial/.download/.opdownload` ke nama akhir = selesai |
+| Drag & drop ke notch | OLE `IDropTarget` di jendela notch; item dibaca dengan `SHCreateShellItemArrayFromDataObject` (CF_HDROP dan Shell IDList Array, termasuk aplikasi Store dari Start). Hanya referensi yang disimpan (`Persisted.pins`) |
 | Progress | `topline progress ...` mengirim `WM_COPYDATA` ke instance yang berjalan |
 | Lokasi (jadwal sholat) | `Geolocator.GetGeopositionAsync` sekali jalan saat pengguna memilih "Lokasi saat ini"; zona waktu dari `GetTimeZoneInformation`. Tanpa pelacakan berkala |
 | Gestur scroll | `WM_MOUSEWHEEL` / `WM_MOUSEHWHEEL` / `WM_MBUTTONUP` di jendela notch (Windows mengirim roda ke jendela di bawah kursor). Volume diubah lewat `IAudioEndpointVolume`; objek dibuat ulang jika perangkat default berganti (dicek hanya saat gestur) |
 | Suara | `PlaySound` alias `Notification.Reminder` / `Notification.Default` |
 
 ## Model core
-- `View`: `Idle` | `Peek` | `Expanded(Widget)`; `Widget`: Music, Focus, Water, Todo, Prayer, Clipboard. `Core::tabs()` menyembunyikan Sholat (tanpa kota) dan Clipboard (riwayat nonaktif).
+- `View`: `Idle` | `Peek` | `Expanded(Widget)`; `Widget`: Music, Focus, Water, Todo, Launcher, Prayer, Clipboard. `Core::tabs()` menyembunyikan Sholat (tanpa kota) dan Clipboard (riwayat nonaktif).
 - Jadwal sholat (`prayer.rs`): posisi matahari (algoritme praytimes.org), Subuh -20°, Isya -18°, Ashar Syafi'i, ihtiyath +2 menit, Imsak = Subuh - 10 menit. Hanya waktu terakhir yang lewat yang diingatkan (mis. setelah sleep).
-- `Command`: Toggle, Open, Close, Switch, FocusStartPause/Reset/Skip, AddWater, UndoWater, ToggleTodo, DeleteTodo, StartAddTodo, SubmitTodo, CancelAddTodo, SetPersonality, SetOpenOnHover, SetScrollGestures, ActivatePeek, DismissPeek. Gestur scroll lewat `Core::scroll()` / `Core::middle_click()` (bukan Command) yang mengembalikan `GestureAction`.
+- `Command`: Toggle, Open, Close, Switch, FocusStartPause/Reset/Skip, AddWater, UndoWater, ToggleTodo, DeleteTodo, StartAddTodo, SubmitTodo, CancelAddTodo, SetPersonality, SetOpenOnHover, SetScrollGestures, ActivatePeek, DismissPeek, DragEnter, DragLeave, AddPins, RemovePin, MovePin, LaunchPin, AskRemovePin. Gestur scroll lewat `Core::scroll()` / `Core::middle_click()` (bukan Command) yang mengembalikan `GestureAction`.
 - `SystemEvent`: Volume, Power, Network, CapsLock, Media, UserActivity, Clipboard, Privacy, Progress, DownloadDone, Location. Event pertama Power/Network hanya mencatat status awal, tanpa peek.
 - `EyeMood` (Happy > Greeting > Sleeping > LowBattery > Focus > Music > Normal) dihitung oleh `Core::eye_mood()`. Happy/Greeting punya waktu kedaluwarsa, dan waktu tidur dihitung dari `set_last_input()`; ketiganya masuk ke `next_deadline_ms()` (hanya saat Personality aktif), jadi tidak ada timer tambahan.
 - Peek: prioritas 1–5. Peek berprioritas lebih tinggi menggantikan yang sedang tampil. Saat notch terbuka, hanya peek prioritas ≥ 4 yang disimpan di antrean untuk ditampilkan nanti.
@@ -96,5 +98,5 @@ Thread downloads: tidur di ReadDirectoryChangesW → WM_APP_DOWNLOAD
 
 ## Pertanyaan terbuka
 - Distribusi: MSIX/Store atau installer biasa + code signing?
-- Shelf: hanya menyimpan referensi path (default rencana), atau menyalin file?
+- Shelf (seret keluar): launcher sudah memakai referensi path; shelf mengikuti keputusan yang sama kecuali diputuskan lain.
 - Cara menurunkan RAM.

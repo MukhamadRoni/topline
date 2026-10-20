@@ -56,6 +56,7 @@ tanpa mengganggu.
 | 💧 | **Air minum** | Target harian dan pengingat |
 | ✅ | **To-do** | `Rapat tim 16:30` → jam dikenali otomatis. Tambah dari mana saja dengan **Win + Alt + N** |
 | 🕌 | **Jadwal sholat** | Dihitung offline dengan metode Kemenag (44 kota) atau **lokasi saat ini**, plus adzan |
+| 🚀 | **Launcher** | Seret aplikasi (termasuk dari Start), file, atau folder ke notch untuk menyematkannya (maks. 8). Hanya referensi; file asli tidak disentuh |
 | 📋 | **Riwayat clipboard** | 20 teks terakhir, bisa di-pin. Hanya di memori; isi pengelola sandi diabaikan |
 | 🟢 | **Indikator privasi** | Titik hijau saat kamera aktif, oranye saat mikrofon aktif |
 | ⬇️ | **Progress & unduhan** | `topline progress 60 "Build"` dari skrip mana pun; unduhan selesai muncul sebagai kabar |
@@ -93,6 +94,8 @@ dimatikan, mata ikut diam.
 | Play/pause | Klik tengah notch (tanpa musik: mute/unmute) |
 | Tambah tugas | **Tambah tugas**, atau **Win + Alt + N** dari mana saja |
 | Hapus tugas / tutup peek | Klik kanan |
+| Sematkan ke launcher | Seret aplikasi/file/folder dari Explorer, Desktop, atau Start ke notch, lalu lepaskan |
+| Atur launcher | Klik tile untuk membuka; seret tile untuk mengubah urutan; klik kanan untuk lokasi file, jalankan sebagai admin, atau lepas sematan |
 | Pengaturan | Klik kanan ikon Topline di system tray (gestur scroll bisa dimatikan di sana) |
 
 **Jadwal sholat.** Tray → *Jadwal sholat*, lalu pilih kota atau **Lokasi saat ini**.
@@ -171,7 +174,9 @@ menyambungkan event. Detailnya ada di [docs/ARCHITECTURE.md](docs/ARCHITECTURE.m
 ## 🗺️ Roadmap
 
 - [ ] Lirik tersinkron (offline)
-- [ ] Shelf file (drag & drop sementara)
+- [x] Launcher mini dengan drag & drop
+- [x] Gestur scroll di notch
+- [ ] Shelf file (drag & drop sementara, seret keluar)
 - [ ] Jendela Pengaturan lengkap
 - [ ] Rapat dari Google Calendar
 - [ ] Notifikasi WhatsApp / Telegram

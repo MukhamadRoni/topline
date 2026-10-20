@@ -5,6 +5,7 @@ mod app;
 mod clip;
 mod editbox;
 mod gfx;
+mod launcher;
 mod media;
 mod notch;
 mod sysmon;
@@ -34,6 +35,8 @@ pub const WM_APP_PRIVACY: u32 = WM_APP + 10;
 pub const WM_APP_DOWNLOAD: u32 = WM_APP + 11;
 /// LPARAM = Box<GeoPoint> (dimiliki penerima), atau 0 jika lokasi gagal didapat.
 pub const WM_APP_LOCATION: u32 = WM_APP + 12;
+/// LPARAM = Box<launcher::DropEvent> (dimiliki penerima); hanya jika App sedang dipinjam.
+pub const WM_APP_DROP: u32 = WM_APP + 13;
 
 fn main() {
     app::run();

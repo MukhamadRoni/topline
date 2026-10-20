@@ -24,6 +24,7 @@ pub const ID_CLIPBOARD: usize = 11;
 pub const ID_PRAYER_OFF: usize = 12;
 pub const ID_PRAYER_LOCATE: usize = 13;
 pub const ID_SCROLL: usize = 14;
+pub const ID_LAUNCHER: usize = 15;
 /// ID_CITY + indeks di `prayer::CITIES`.
 pub const ID_CITY: usize = 100;
 
@@ -110,6 +111,7 @@ impl Tray {
             };
             item(ID_OPEN, "Buka Topline\tWin+Alt+T", false);
             item(ID_ADD_TODO, "Tambah tugas\tWin+Alt+N", false);
+            item(ID_LAUNCHER, "Buka launcher", false);
             sep();
             item(ID_HOVER, "Buka saat kursor mendekat", st.hover);
             item(ID_PERSONALITY, "Mata saat idle (Personality)", st.personality);

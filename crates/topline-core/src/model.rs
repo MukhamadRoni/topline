@@ -164,6 +164,35 @@ impl WaterDay {
     }
 }
 
+/// Jenis sematan launcher (menentukan ikon cadangan dan menu "Jalankan sebagai administrator").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum PinKind {
+    /// .exe, .lnk, atau aplikasi Store (`shell:AppsFolder\<AUMID>`).
+    App,
+    File,
+    Folder,
+}
+
+/// Sematan launcher. Hanya referensi; file pengguna tidak pernah disalin atau diubah.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Pin {
+    pub id: u64,
+    pub kind: PinKind,
+    /// Path, atau `shell:AppsFolder\<AUMID>` untuk aplikasi Store.
+    pub target: String,
+    pub name: String,
+}
+
+/// Item hasil drop sebelum diberi id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PinInput {
+    pub kind: PinKind,
+    pub target: String,
+    pub name: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(default))]
@@ -173,6 +202,8 @@ pub struct Persisted {
     pub todos: Vec<Todo>,
     pub water: WaterDay,
     pub next_id: u64,
+    /// Sematan launcher, urut sesuai tampilan.
+    pub pins: Vec<Pin>,
 }
 
 impl Default for Persisted {
@@ -183,6 +214,7 @@ impl Default for Persisted {
             todos: Vec::new(),
             water: WaterDay::default(),
             next_id: 1,
+            pins: Vec::new(),
         }
     }
 }

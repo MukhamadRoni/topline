@@ -9,7 +9,7 @@ Kriteria umum untuk setiap item: CPU idle tetap ~0, tanpa polling, build tanpa w
    - UI: widget/tab "Lirik" baru (lihat prototipe: notch terbelah, baris aktif putih 20 px, baris lain 62%, klik baris untuk seek via `TryChangePlaybackPositionAsync`).
    - Parser `.lrc` dan pemilihan baris aktif ditaruh di crate baru `topline-lyrics` (Rust murni) beserta test.
 2. **Shelf file**
-   - `IDropTarget` pada jendela notch (perlu `RegisterDragDrop` dan OLE init), simpan referensi path (keputusan default), kartu 116 px. Klik membuka (`ShellExecuteW`), seret keluar via `IDropSource` + `IDataObject` (CF_HDROP), klik kanan untuk menghapus.
+   - `IDropTarget` dan OLE init sudah ada (launcher). Shelf = area sementara terpisah dari sematan, simpan referensi path (keputusan default), kartu 116 px. Klik membuka (`ShellExecuteW`), seret keluar via `IDropSource` + `IDataObject` (CF_HDROP), klik kanan untuk menghapus.
 3. **Jendela Pengaturan** (native, lihat artboard "Pengaturan" di prototipe)
    - Opsi: mulai bersama Windows, monitor, menyingkir saat full-screen, cara membuka, Personality, widget aktif, target dan interval air minum, durasi fokus/istirahat, peek sistem.
    - Semua field sudah ada di `Settings`, kecuali pemilihan monitor dan widget aktif.
@@ -27,6 +27,7 @@ Kriteria umum untuk setiap item: CPU idle tetap ~0, tanpa polling, build tanpa w
 - Animasi pegas (`SpringVector2NaturalMotionAnimation`) untuk buka/tutup, dan indikator tab yang bergeser.
 
 ## Selesai setelah v0.1
+- 🚀 Launcher mini (tab kelima): seret aplikasi (.exe, .lnk, aplikasi Store dari Start), file, atau folder ke notch dalam keadaan apa pun. Maks. 8 sematan, duplikat diabaikan, hanya referensi (efek drop LINK). Klik membuka (ShellExecuteEx), seret tile untuk mengatur ulang, klik kanan: buka lokasi file / jalankan sebagai administrator / lepas sematan. Target hilang tampil redup. Ikon di-cache sebagai PNG. RAM +~3 MB dengan 8 sematan.
 - 🖱️ Gestur scroll di notch: scroll vertikal = volume (2% per takik, delta touchpad diakumulasi), horizontal / Shift + scroll = lagu berikutnya/sebelumnya (cooldown 450 ms), scroll di bar tab = pindah widget, klik tengah = play/pause (atau mute). Hover tidak membuka notch selama 1,5 s sejak scroll. Peek `Track` dengan judul lagu baru. Bisa dimatikan dari tray.
 - Mata Personality hidup: kedip, 7 ekspresi (`EyeMood`), tidur tanpa polling (deadline core + Raw Input mouse hanya saat tidur), lirikan ke kursor, menghormati "Animation effects" Windows. Semuanya visual DWM, CPU idle tetap ~0. Demo: `TOPLINE_EYE_DEMO=1` (mode debug).
 - Ikon baru dari `assets/logo/logo.jpg`, banner di README.

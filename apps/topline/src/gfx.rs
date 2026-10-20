@@ -237,6 +237,31 @@ impl Gfx {
             rt.CreateBitmapFromWicBitmap(&conv, None)
         }
     }
+
+    /// Simpan HBITMAP ikon shell (alpha premultiplied) sebagai PNG.
+    pub fn save_png(&self, hbmp: windows::Win32::Graphics::Gdi::HBITMAP, path: &std::path::Path) -> Result<()> {
+        unsafe {
+            let src = self.wic.CreateBitmapFromHBITMAP(hbmp, windows::Win32::Graphics::Gdi::HPALETTE::default(), WICBitmapUsePremultipliedAlpha)?;
+            let conv = self.wic.CreateFormatConverter()?;
+            conv.Initialize(&src, &GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeMedianCut)?;
+            let (mut w, mut h) = (0u32, 0u32);
+            src.GetSize(&mut w, &mut h)?;
+            let stream = self.wic.CreateStream()?;
+            stream.InitializeFromFilename(&HSTRING::from(path.as_os_str()), GENERIC_WRITE.0)?;
+            let enc = self.wic.CreateEncoder(&GUID_ContainerFormatPng, std::ptr::null())?;
+            enc.Initialize(&stream, WICBitmapEncoderNoCache)?;
+            let mut frame = None;
+            enc.CreateNewFrame(&mut frame, std::ptr::null_mut())?;
+            let frame = frame.ok_or_else(|| Error::from(E_FAIL))?;
+            frame.Initialize(None)?;
+            frame.SetSize(w, h)?;
+            let mut fmt = GUID_WICPixelFormat32bppBGRA;
+            frame.SetPixelFormat(&mut fmt)?;
+            frame.WriteSource(&conv, std::ptr::null())?;
+            frame.Commit()?;
+            enc.Commit()
+        }
+    }
 }
 
 pub fn color(c: Rgba) -> D2D1_COLOR_F {
@@ -439,6 +464,14 @@ impl<'a> Painter<'a> {
             let Ok(b) = rt.CreateLinearGradientBrush(&props, None, &coll) else { return };
             let rr = D2D1_ROUNDED_RECT { rect: rect(x, y, w, h), radiusX: r, radiusY: r };
             self.ctx.FillRoundedRectangle(&rr, &b);
+        }
+    }
+
+    /// Gambar bitmap apa adanya ke kotak (ikon launcher), dengan opasitas.
+    pub fn bitmap(&self, bmp: &ID2D1Bitmap, x: f32, y: f32, w: f32, h: f32, opacity: f32) {
+        unsafe {
+            let rt: &ID2D1RenderTarget = self.ctx;
+            rt.DrawBitmap(bmp, Some(&rect(x, y, w, h)), opacity, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
         }
     }
 

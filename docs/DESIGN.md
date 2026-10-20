@@ -31,7 +31,8 @@ Sumber: prototipe kanvas "Topline — Windows Notch Prototype" (artifact Claude 
 | Peek | 340 × 44, radius 22 |
 | Expanded | lebar 592, radius 28 |
 | Tata letak expanded | padding samping 20, atas 12; header 40; jarak 16; tab 48; bawah 14 |
-| Tinggi isi widget | Musik 164 · Fokus 120 · Air 168 · To-do 28 + 4 + baris × 44 + 6 + 44 (maks. 6 baris) · Sholat 168 · Clipboard 28 + 4 + baris × 44 (maks. 6) |
+| Tinggi isi widget | Musik 164 · Fokus 120 · Air 168 · To-do 28 + 4 + baris × 44 + 6 + 44 (maks. 6 baris) · Sholat 168 · Clipboard 28 + 4 + baris × 44 (maks. 6) · Launcher kosong 120, 1 baris 104, 2 baris 220 |
+| Tile launcher | (552 − 3 × 12) / 4 = 129 × 104, jarak 12, radius 20, ikon 48 di tengah atas (y + 14), nama 12 px satu baris dengan elipsis |
 | Tombol | tinggi 44 (pill), ikon bulat 40–52 |
 | Tab | pill wadah 48, item 52 × 40, indikator aktif `.14` |
 
@@ -60,5 +61,6 @@ Animasi: cubic-bezier(0.22, 1, 0.36, 1), 420 ms untuk ukuran, fade isi 260 ms (j
 - **Sholat:** label "Sholat berikutnya · Kota", nama waktu 18/500, jam 48 px, "dalam 1 j 12 mnt", tombol kaca "Suara adzan aktif/mati". Kartu kanan 220 × 168 berisi 7 baris 22 px (Imsak–Isya); waktu berikutnya disorot sky 18%, yang lewat text-3.
 - **Clipboard:** "Riwayat clipboard" + "HAPUS SEMUA" (label mono), baris 44 px: ikon tempel (centang mint + "DISALIN" setelah disalin), teks satu baris dengan elipsis, tombol pin 32 px (sky saat disematkan). Klik kanan menghapus.
 - **Indikator privasi (idle):** titik 6 px di ujung kanan pill, mint = kamera, amber = mikrofon.
-- **Tab:** ikon Sholat = bulan sabit (E708), Clipboard = tempel (E77F). Tab hanya tampil jika fiturnya aktif.
-- **Peek:** ikon di kiri, teks, nilai di kanan. Pengingat minum punya tombol putih "+250 ml". Peek baru: waktu sholat (bulan, sky), kamera/mikrofon dipakai (mint/amber), progress (bar sky + persen, atau "BERJALAN"), selesai/gagal (centang mint / silang amber), unduhan selesai (panah unduh), ganti lagu dari gestur scroll (ikon next/prev sky + judul lagu baru, atau "Lagu berikutnya"/"Lagu sebelumnya" sampai judul tersedia; 1,6 s, prioritas sama dengan volume).
+- **Launcher:** grid 4 × 2. Tile isi `.05`, border `.10`, hover `.14`. Target hilang: ikon 35%, nama text-3, label mono "TIDAK DITEMUKAN" amber 80%; klik → tile berubah jadi "Lepas sematan?" dengan pill putih "Lepas" + kaca "Batal". Tile yang diseret: isi `.14`, border sky 1,5. Keadaan kosong: zona putus-putus putih 26% + ikon kotak 2 × 2 + "Seret aplikasi, file, atau folder ke sini." Saat drag OLE di atas notch: lapisan navy pekat + sky 12% dengan garis putus-putus sky dan teks "Lepaskan untuk menyematkan" (amber + "Maksimal 8..." jika penuh). Pesan batas sematan menggantikan label tanggal di header selama 3,5 s (amber, 12 px).
+- **Tab:** ikon Launcher = kotak 2 × 2 digambar dengan rrect (bukan glyph), ikon Sholat = bulan sabit (E708), Clipboard = tempel (E77F). Tab hanya tampil jika fiturnya aktif.
+- **Peek:** ikon di kiri, teks, nilai di kanan. Pengingat minum punya tombol putih "+250 ml". Peek baru: waktu sholat (bulan, sky), kamera/mikrofon dipakai (mint/amber), progress (bar sky + persen, atau "BERJALAN"), selesai/gagal (centang mint / silang amber), unduhan selesai (panah unduh), gagal membuka sematan (silang amber, "Tidak bisa membuka <nama>"), ganti lagu dari gestur scroll (ikon next/prev sky + judul lagu baru, atau "Lagu berikutnya"/"Lagu sebelumnya" sampai judul tersedia; 1,6 s, prioritas sama dengan volume).
